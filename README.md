@@ -19,7 +19,7 @@ Each model call sends one event with these fields and nothing else:
 
 Presence events (`session_start`, `heartbeat`, `session_end`) carry only the session id, provider, model and start time.
 
-**Never sent:** prompts, responses, code, file paths, repo names, tool calls or tool output, working directory. The ingest function validates every request against this allowlist and rejects the whole request if any other field appears. `/usage-pause` stops reporting for a session. Deleting your account from Settings removes every event you ever sent.
+**Never sent:** prompts, responses, code, file paths, repo names, tool calls or tool output, working directory. The ingest function validates every request against this allowlist and rejects the whole request if any other field appears. `/munch pause` stops reporting for a session. Deleting your account from Settings removes every event you ever sent.
 
 ## How it works
 
@@ -62,7 +62,7 @@ RLS: signed-in members can read everything except other people's keys. No client
 2. **Enable OAuth providers.** Supabase Dashboard → Authentication → Sign In / Providers → GitHub and/or Discord (needs an OAuth app on each). Set the callback URL shown there in the GitHub/Discord app. Then turn **off** the Email provider, which isn't used.
 3. **Set redirect URLs.** Authentication → URL Configuration: set Site URL to the dashboard URL and add `http://localhost:3000/**` plus your production URL under Redirect URLs.
 4. **Deploy the dashboard.** Vercel → import this repo, root directory `dashboard`, env vars from [`dashboard/.env.example`](dashboard/.env.example).
-5. **Publish the plugin.** `cd plugin && npm publish`, then everyone runs `omp plugin install omp-tokenmunchers` and `/usage-login`.
+5. **Publish the plugin.** `cd plugin && npm publish`, then everyone runs `omp plugin install omp-tokenmunchers` and `/munch login`.
 
 ## Development
 

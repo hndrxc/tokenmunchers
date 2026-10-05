@@ -85,8 +85,8 @@ export function SettingsClient({ profile, keys }: { profile: Profile; keys: ApiK
           </li>
           <li>Create an API key below. It is shown once.</li>
           <li>
-            In OMP, run <code>/usage-login</code> and paste the key. <code>/usage-status</code> shows queue and connection state;{" "}
-            <code>/usage-pause</code> stops reporting for private or client work.
+            In OMP, run <code>/munch login</code> and paste the key. <code>/munch status</code> shows queue and connection state;{" "}
+            <code>/munch pause</code> stops reporting for private or client work.
           </li>
         </ol>
         <p className="sub" style={{ marginBottom: 0 }}>
@@ -111,7 +111,7 @@ export function SettingsClient({ profile, keys }: { profile: Profile; keys: ApiK
                 {copied ? "Copied" : "Copy"}
               </button>
               <span className="sub">
-                Then in OMP: <code>/usage-login {newKey.slice(0, 10)}…</code>
+                Then in OMP: <code>/munch login {newKey.slice(0, 10)}…</code>
               </span>
             </div>
           </div>

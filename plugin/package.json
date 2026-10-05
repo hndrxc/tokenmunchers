@@ -1,13 +1,26 @@
 {
   "name": "omp-tokenmunchers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reports Oh My Pi token usage (metadata only) to your friend group's tokenmunchers leaderboard",
   "type": "module",
   "main": "index.ts",
-  "files": ["index.ts", "src/", "README.md"],
-  "keywords": ["omp-plugin", "pi-package", "oh-my-pi", "usage", "tokens", "leaderboard"],
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md"
+  ],
+  "keywords": [
+    "omp-plugin",
+    "pi-package",
+    "oh-my-pi",
+    "usage",
+    "tokens",
+    "leaderboard"
+  ],
   "omp": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
