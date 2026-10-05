@@ -1,92 +1,193 @@
 # tokenmunchers
 
-A live leaderboard of AI token usage for the crew. An Oh My Pi (OMP) plugin reports every model call's token counts to Supabase, and a Next.js dashboard ranks everyone in real time.
+A live, invite-only leaderboard of AI token usage for a group of friends.
 
-## Privacy: exactly what leaves your machine
+The `omp-tokenmunchers` plugin for [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) reports the token counts of every model call. A [web dashboard](https://tokenmunchers.taiisshort.com) ranks everyone in real time: who's online, today's and this week's totals, all-time totals, and per-model breakdowns.
 
-Each model call sends one event with these fields and nothing else:
+- **Real time.** A finished model call shows up on the dashboard in about a second.
+- **Metadata only.** Token counts, model names and timestamps. Never prompts, responses, code or file paths.
+- **Complete history.** Imports your usage from before you installed the plugin, and recovers calls that were missed.
+- **Private by default.** Sign-in is invite-only, and every member can pause reporting at any time.
 
-| Field | Example |
+---
+
+## Contents
+
+- [Getting started](#getting-started)
+- [Using the plugin](#using-the-plugin)
+- [Privacy](#privacy)
+- [Troubleshooting](#troubleshooting)
+- [How it works](#how-it-works)
+- [Repository layout](#repository-layout)
+
+---
+
+## Getting started
+
+This guide takes you from nothing to appearing on the leaderboard in about ten minutes.
+
+### Before you start
+
+- An invite. Ask the group admin to add the email address of your **GitHub or Discord** account to the allowlist.
+- macOS, Linux, or Windows. On Windows, either PowerShell or WSL works.
+
+### 1. Install Bun
+
+OMP and its plugins run on [Bun](https://bun.sh) (version **1.3.14 or newer**). Without it, `omp plugin install` fails. If you installed OMP some other way, install Bun anyway.
+
+**macOS / Linux / WSL**
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+**Windows (PowerShell)**
+
+```powershell
+powershell -c "irm bun.sh/install.ps1 | iex"
+```
+
+Then **open a new terminal** so Bun is on your `PATH`, and check the version:
+
+```bash
+bun --version   # must print 1.3.14 or newer
+```
+
+If you already have an older Bun, update it with `bun upgrade`.
+
+### 2. Install Oh My Pi
+
+Skip this step if `omp --version` already works.
+
+```bash
+bun install -g @oh-my-pi/pi-coding-agent
+omp --version
+```
+
+Run `omp` once and finish its first-run setup (choose a model, sign in to your provider) before continuing. See the [OMP README](https://github.com/can1357/oh-my-pi#readme) for other install methods.
+
+### 3. Sign in to the dashboard
+
+Open **[tokenmunchers.taiisshort.com](https://tokenmunchers.taiisshort.com)** and sign in with the GitHub or Discord account whose email was invited. If you see "not a member", your email isn't on the allowlist yet; check with the admin.
+
+### 4. Create an API key
+
+On the dashboard, go to **[Settings](https://tokenmunchers.taiisshort.com/settings) → API keys**, give the key a label (for example, the machine's name) and click **Create**. **Copy the key now.** It starts with `tm_` and is shown only once. Create a separate key for each computer you use.
+
+### 5. Install the plugin
+
+```bash
+omp plugin install omp-tokenmunchers
+```
+
+### 6. Connect the plugin
+
+Start `omp` and run:
+
+```
+/munch login tm_your_key_here
+```
+
+You should see *"logged in. Usage from this machine now shows on the dashboard."* Make any request in OMP. Within a few seconds it should appear in the dashboard's **Activity** feed, and you'll show under **Live now**.
+
+### 7. Import your history (optional)
+
+To include usage from before you installed the plugin:
+
+```
+/munch backfill
+```
+
+You'll see a preview (number of calls, total tokens, date range, and projects) before anything is uploaded. To leave a project out (for example, client work), exclude it by part of its name:
+
+```
+/munch backfill --exclude acme,secret-project
+```
+
+Only daily totals per model are uploaded. Running it again replaces your previous upload, so it's safe to repeat.
+
+**You're done.** To keep the plugin up to date, re-run `omp plugin install omp-tokenmunchers` from time to time.
+
+---
+
+## Using the plugin
+
+Everything is under one command, `/munch`, with tab completion:
+
+| Command | What it does |
 | --- | --- |
-| `event_id` | UUID derived from the call (makes retries and resends idempotent) |
-| `session_id` | OMP session id |
-| `ts` | when the call finished (start + duration) |
-| `provider`, `model` | `anthropic`, `claude-opus-5-5` |
-| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | integers |
-| `cost_usd` | as reported by OMP (0 on subscriptions) |
-| `is_subagent` | true for subagent / swarm calls |
-| `client_version` | plugin version |
+| `/munch` | Shows connection status, queued events and the last error |
+| `/munch login [key]` | Connects this machine with an API key |
+| `/munch pause` / `/munch resume` | Stops reporting for this OMP process (for private or client work), or turns it back on |
+| `/munch sync` | Re-sends recent calls that didn't get through (this also happens automatically every minute) |
+| `/munch backfill` | Imports your usage from before you installed the plugin |
 
-Presence events (`session_start`, `heartbeat`, `session_end`) carry only the session id, provider, model and start time.
+The full command reference and configuration options are in the [plugin README](plugin/README.md).
 
-`/munch backfill` (opt-in, with a preview first) uploads usage from before you installed the plugin as **daily totals only**: UTC day, provider, model, subagent flag, call count, the four token counts and cost, plus a random per-install device id. Calls the plugin resends from OMP's local stats (`/munch sync` and the background gap fill) are ordinary usage events with the fields above. Imported costs are OMP's stats estimates, which price subscription usage at public API rates, so they can be non-zero where live events report 0.
+---
 
-**Never sent:** prompts, responses, code, file paths, repo names, tool calls or tool output, working directory. The ingest function validates every request against this allowlist and rejects the whole request if any other field appears. `/munch pause` stops reporting for a session. Deleting your account from Settings removes every event you ever sent.
+## Privacy
+
+For each model call the plugin sends the **provider, model, token counts, cost, timestamp, session id and a subagent flag**. Nothing else.
+
+**Never sent:** prompts, responses, code, file paths, repository or project names, tool calls or their output, or your working directory. The server checks every request against a fixed list of allowed fields and rejects any request that contains anything else.
+
+- **Pause** at any time with `/munch pause`. Calls made while paused are never uploaded, now or later.
+- **History imports** (`/munch backfill`) are opt-in, show a preview first, and send only daily totals.
+- **Delete your account** from Settings to permanently remove everything you've ever sent.
+
+See [exactly which fields are sent](plugin/README.md#data-sent) in the plugin README.
+
+---
+
+## Troubleshooting
+
+**`bun: command not found` right after installing Bun**
+Open a new terminal. If it still isn't found, add `~/.bun/bin` to your `PATH` (on Windows, `%USERPROFILE%\.bun\bin`).
+
+**`omp plugin install` fails, or `omp` isn't found**
+Check that `bun --version` prints 1.3.14 or newer (update with `bun upgrade`), then reinstall OMP with `bun install -g @oh-my-pi/pi-coding-agent`.
+
+**`/munch` is an unknown command**
+The plugin isn't loaded. Run `omp plugin install omp-tokenmunchers` again and restart `omp`.
+
+**"API key was rejected"**
+The key was revoked or mistyped. Create a new key under Settings and run `/munch login` again.
+
+**My calls don't show up**
+- Run `/munch`. Check that the state is `reporting` (not paused) and look at the last error.
+- If events are queued, they retry automatically. `/munch sync` also re-sends anything missed in the last week.
+- A call only appears once its response finishes, so a long-running request appears when it completes.
+
+**`/munch backfill` says "couldn't find OMP's stats database"**
+Run `omp stats` once to build it, then try again.
+
+**Other usage is still queued**
+Backfill waits until queued calls have been delivered, so those calls don't get counted twice. Wait a minute, check `/munch`, and try again.
+
+---
 
 ## How it works
 
 ```
-OMP plugin ──POST /functions/v1/ingest──▶ Edge Function ──rpc ingest()──▶ Postgres
- (per model call, fire-and-forget,          (validate, hash key,             │
-  JSONL queue + retry on failure)            rate limit 600/min/key)         │ Realtime (postgres_changes)
-                                                                             ▼
-                                                                  Next.js dashboard (websocket)
+ OMP + plugin ──── per call ────▶ ingest  (Edge Function) ──▶ Postgres ──Realtime──▶ Dashboard
+      │                                                           ▲
+      └──── /munch backfill ────▶ history (Edge Function) ────────┘
 ```
 
-Measured on the live project: ingest round trip ~0.2–0.3 s warm, model call end → dashboard render 0.45–1.0 s.
+1. When a model call finishes, the plugin sends its token counts immediately. If the network is down, the call is queued on disk and retried.
+2. The `ingest` Edge Function checks the request's fields and API key and stores the call. Each call has an ID, so a repeated send is stored only once.
+3. Database jobs add calls up into daily totals every 10 minutes. Per-call data is kept for about a week; daily totals are kept forever.
+4. The dashboard subscribes to new calls over Supabase Realtime, so it updates without reloading.
 
-| Piece | Where |
-| --- | --- |
-| OMP plugin (`omp-tokenmunchers`) | [`plugin/`](plugin/) |
-| Ingest Edge Function | [`supabase/functions/ingest/`](supabase/functions/ingest/index.ts) |
-| History import Edge Function | [`supabase/functions/history/`](supabase/functions/history/index.ts) |
-| Schema, RLS, rollups, cron | [`supabase/migrations/`](supabase/migrations/) |
-| Dashboard (Next.js 16, App Router) | [`dashboard/`](dashboard/) |
+---
 
-Supabase project: `tokenmunchers` (`fywgkzqgtitpwijweojk`, us-east-2).
+## Repository layout
 
-### Data model
+| Folder | What's in it | Docs |
+| --- | --- | --- |
+| [`plugin/`](plugin/) | The `omp-tokenmunchers` OMP plugin (TypeScript, runs on Bun) | [plugin/README.md](plugin/README.md) |
+| [`dashboard/`](dashboard/) | The web dashboard (Next.js, deployed on Vercel) | [dashboard/README.md](dashboard/README.md) |
+| [`supabase/`](supabase/) | Database schema, security rules, scheduled jobs and Edge Functions | [supabase/README.md](supabase/README.md) |
 
-- `profiles`, created by a trigger on sign-up **only if the email is in `allowlist`** (invite-only).
-- `api_keys` store only a SHA-256 hash and a display prefix; the plaintext `tm_…` key is shown once.
-- `usage_events` hold raw per-call events, kept until the start of UTC day today−8, and feed Realtime and the recent/7-day views.
-- `usage_daily` holds per user/day/provider/model/subagent rollups, kept forever. pg_cron re-rolls today−7..today every 10 minutes; ingest rejects events older than 7 days, so every late event lands on a day that is still re-rolled, and no re-rolled day has lost raw rows.
-- `usage_history` holds imported pre-install daily totals per user and device (`/munch backfill`). Each upload replaces that device's previous one. The plugin only imports calls from before that machine's first live event, so history and live data never overlap.
-- `usage_daily_all` (view) and `leaderboard_all_time()` add history to live data; the dashboard's charts and all-time totals read them.
-- `live_sessions` is presence. A user is live if a heartbeat arrived in the last 90 s.
-
-RLS: signed-in members can read everything except other people's keys. No client role can write usage data or call `ingest`; only the Edge Function (secret key) can.
-
-## Setup checklist
-
-1. **Allowlist friends.** In the Supabase SQL editor:
-   ```sql
-   insert into public.allowlist (email) values ('friend@example.com');
-   ```
-   Use the email on their GitHub/Discord account.
-2. **Enable OAuth providers.** Supabase Dashboard → Authentication → Sign In / Providers → GitHub and/or Discord (needs an OAuth app on each). Set the callback URL shown there in the GitHub/Discord app. Then turn **off** the Email provider, which isn't used.
-3. **Set redirect URLs.** Authentication → URL Configuration: set Site URL to the dashboard URL and add `http://localhost:3000/**` plus your production URL under Redirect URLs.
-4. **Deploy the dashboard.** Vercel → import this repo, root directory `dashboard`, env vars from [`dashboard/.env.example`](dashboard/.env.example).
-5. **Publish the plugin.** `cd plugin && npm publish`, then everyone runs `omp plugin install omp-tokenmunchers` and `/munch login`.
-
-## Development
-
-```bash
-cd plugin && npm install && npm test && npm run typecheck
-cd dashboard && cp .env.example .env.local && npm install && npm run dev
-```
-
-The Edge Functions deploy with `supabase functions deploy ingest history` (they authenticate plugin keys themselves, so `verify_jwt = false` in [`supabase/config.toml`](supabase/config.toml)).
-
-## Decisions on the design doc's open questions
-
-- **Rank by tokens or cost?** Tokens by default, with a Cost toggle. Cost is as reported by OMP, and subscription plans report $0.
-- **Subagent calls?** Counted in the total by default, with the subagent share shown per person and a "Main only" toggle.
-- **Hosting?** Either works. The dashboard is a standard Next.js app, so Vercel is the least effort, and a `hndrxc.com` subdomain can point at it.
-- **Sign-in?** Both GitHub and Discord buttons are wired; enable whichever providers you configure.
-
-## Differences from the design doc
-
-- **Presence** is a `live_sessions` table pushed over Realtime instead of a Realtime presence channel, because an Edge Function can't hold a presence connection open, and the table survives page reloads.
-- **Rollups** run every 10 minutes (idempotent upsert over the last 8 days) instead of nightly. "Today" and "All time" combine rollups with exact raw totals, so nothing on the dashboard lags the feed.
-- **API-equivalent cost** using a price table is not built yet; cost is whatever OMP reports.
+Running your own instance, administering members, and deploying are covered in the [Supabase](supabase/README.md) and [dashboard](dashboard/README.md) READMEs. Plugin development and releases are covered in the [plugin README](plugin/README.md).
