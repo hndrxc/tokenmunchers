@@ -1,0 +1,28 @@
+{
+  "name": "omp-tokenmunchers",
+  "version": "0.1.0",
+  "description": "Reports Oh My Pi token usage (metadata only) to your friend group's tokenmunchers leaderboard",
+  "type": "module",
+  "main": "index.ts",
+  "files": ["index.ts", "src/", "README.md"],
+  "keywords": ["omp-plugin", "pi-package", "oh-my-pi", "usage", "tokens", "leaderboard"],
+  "omp": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.6.1",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
