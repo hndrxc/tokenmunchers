@@ -3,9 +3,11 @@ import Link from "next/link";
 export function Nav({ handle }: { handle?: string }) {
   return (
     <nav className="nav">
-      <Link href="/" className="brand">
-        token<span>munchers</span>
-      </Link>
+      <div className="titlebar">
+        <Link href="/" className="brand">
+          🍪 token<span>munchers</span>.exe
+        </Link>
+      </div>
       <div className="nav-links">
         <Link href="/">Leaderboard</Link>
         {handle && <Link href={`/u/${handle}`}>Profile</Link>}

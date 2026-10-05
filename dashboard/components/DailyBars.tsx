@@ -50,7 +50,7 @@ export function DailyBars({ points, unit = "tokens" }: { points: Point[]; unit?:
           const bh = p.value > 0 ? Math.max(2, (p.value / max) * plotH) : 0;
           return (
             <g key={p.day}>
-              {bh > 0 && <path d={roundedTop(x, y(0) - bh, bw, bh, Math.min(4, bw / 2))} fill={hover === i ? "var(--bar-hover)" : "var(--bar)"} />}
+              {bh > 0 && <path d={roundedTop(x, y(0) - bh, bw, bh, 0)} fill={hover === i ? "var(--bar-hover)" : "var(--bar)"} />}
               <rect x={padL + i * col} y={padT} width={col} height={plotH} fill="transparent" onMouseEnter={() => setHover(i)} />
               {((w >= 480 ? i % 7 === (points.length - 1) % 7 : i % 14 === (points.length - 1) % 14) || i === points.length - 1) && (
                 <text className="tick" x={x + bw / 2} y={h - 6} textAnchor="middle">
