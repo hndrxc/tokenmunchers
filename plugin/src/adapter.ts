@@ -86,6 +86,17 @@ export function usageEventId(sessionKey: string | undefined, timestamp: unknown,
 	return uuidV5(`${sessionKey}|${Math.trunc(timestamp)}|${provider}|${model}`);
 }
 
+/**
+ * When a call happened, in ms: its start timestamp plus duration. The live path
+ * and stats.db rows both use this, so "before this machine went live" means
+ * the same thing to the history import and to the live/gap-fill side.
+ */
+export function callTime(timestamp: unknown, duration: unknown, now: number = Date.now()): number {
+	if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) return now;
+	const end = timestamp + (typeof duration === "number" && Number.isFinite(duration) && duration > 0 ? duration : 0);
+	return Math.min(end, now);
+}
+
 export interface SessionInfo {
 	id: string;
 	/** From {@link sessionKeyFromFile}; without it the event id is random. */
@@ -117,7 +128,7 @@ export function toUsageEvent(
 		kind: "usage",
 		event_id: usageEventId(session.key, m.timestamp, provider, model),
 		session_id: session.id.slice(0, 128),
-		ts: now.toISOString(),
+		ts: new Date(callTime(m.timestamp, m.duration, now.getTime())).toISOString(),
 		provider,
 		model,
 		input_tokens: count(usage.input),
@@ -153,4 +164,48 @@ export function presence(
 
 export function sessionEnd(sessionId: string): SessionEndEvent {
 	return { kind: "session_end", session_id: sessionId.slice(0, 128), client_version: CLIENT_VERSION };
+}
+
+/** Session id for a stats.db call: main session files are `<timestamp>_<sessionId>`. */
+export function sessionIdFromKey(sessionKey: string): string {
+	if (sessionKey.includes("/")) return sessionKey.slice(0, 128); // subagent: keep the parent prefix
+	const sep = sessionKey.indexOf("_");
+	return (sep >= 0 ? sessionKey.slice(sep + 1) : sessionKey).slice(0, 128);
+}
+
+/** A stats.db call as a usage event, with the same event id the live path gave it. */
+export function statsCallToEvent(
+	call: {
+		timestamp: number;
+		duration: number | null;
+		provider: string;
+		model: string;
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		cost: number;
+		isSubagent: boolean;
+	},
+	sessionKey: string,
+	now: number = Date.now(),
+): UsageEvent | null {
+	return toUsageEvent(
+		{
+			role: "assistant",
+			provider: call.provider,
+			model: call.model,
+			timestamp: call.timestamp,
+			duration: call.duration ?? undefined,
+			usage: {
+				input: call.input,
+				output: call.output,
+				cacheRead: call.cacheRead,
+				cacheWrite: call.cacheWrite,
+				cost: { total: call.cost },
+			},
+		},
+		{ id: sessionIdFromKey(sessionKey), key: sessionKey, isSubagent: call.isSubagent },
+		new Date(now),
+	);
 }

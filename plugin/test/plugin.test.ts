@@ -165,7 +165,7 @@ describe("Reporter", () => {
 		let online = false;
 		const reporter = new Reporter({
 			dataDir: dir,
-			getConfig: () => ({ ingestUrl: "https://x.test/ingest", apiKey: KEY }),
+			getConfig: () => ({ ingestUrl: "https://x.test/ingest", historyUrl: "https://x.test/history", apiKey: KEY }),
 			fetchImpl: (async (_url: string, init: RequestInit) => {
 				calls.push(JSON.parse(init.body as string));
 				if (!online) throw new Error("offline");
@@ -190,7 +190,7 @@ describe("Reporter", () => {
 		const sent: number[] = [];
 		const reporter = new Reporter({
 			dataDir: dir,
-			getConfig: () => ({ ingestUrl: "https://x.test/ingest", apiKey: KEY }),
+			getConfig: () => ({ ingestUrl: "https://x.test/ingest", historyUrl: "https://x.test/history", apiKey: KEY }),
 			fetchImpl: (async (_url: string, init: RequestInit) => {
 				const body = JSON.parse(init.body as string);
 				const n = body.events ? body.events.length : 1;
@@ -207,7 +207,7 @@ describe("Reporter", () => {
 		let key: string | undefined;
 		const reporter = new Reporter({
 			dataDir: dir,
-			getConfig: () => ({ ingestUrl: "https://x.test/ingest", apiKey: key }),
+			getConfig: () => ({ ingestUrl: "https://x.test/ingest", historyUrl: "https://x.test/history", apiKey: key }),
 			fetchImpl: (async () => respond(401, { error: "invalid_key" })) as typeof fetch,
 			onUnauthorized: () => unauthorized++,
 		});

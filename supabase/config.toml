@@ -3,3 +3,6 @@ project_id = "fywgkzqgtitpwijweojk"
 # The ingest function authenticates plugin API keys itself.
 [functions.ingest]
 verify_jwt = false
+
+[functions.history]
+verify_jwt = false

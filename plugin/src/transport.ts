@@ -7,7 +7,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
-import type { OutboundEvent } from "./adapter.ts";
+import type { OutboundEvent, UsageEvent } from "./adapter.ts";
 import type { Config } from "./config.ts";
 
 export type SendResult = "ok" | "retry" | "unauthorized" | "rejected";
@@ -24,6 +24,8 @@ export interface ReporterOptions {
 	getConfig: () => Config;
 	fetchImpl?: typeof fetch;
 	onUnauthorized?: () => void;
+	/** Called with the usage events the server accepted. */
+	onDelivered?: (events: UsageEvent[]) => void;
 	now?: () => number;
 }
 
@@ -32,6 +34,7 @@ export class Reporter {
 	readonly #getConfig: () => Config;
 	readonly #fetch: typeof fetch;
 	readonly #onUnauthorized?: () => void;
+	readonly #onDelivered?: (events: UsageEvent[]) => void;
 	readonly #now: () => number;
 	#flushing = false;
 	#failures = 0;
@@ -43,6 +46,7 @@ export class Reporter {
 		this.#getConfig = opts.getConfig;
 		this.#fetch = opts.fetchImpl ?? fetch;
 		this.#onUnauthorized = opts.onUnauthorized;
+		this.#onDelivered = opts.onDelivered;
 		this.#now = opts.now ?? Date.now;
 	}
 
@@ -95,6 +99,14 @@ export class Reporter {
 			}
 			if (res.ok) {
 				this.lastError = undefined;
+				const usage = pending.filter((e): e is UsageEvent => e.kind === "usage");
+				if (usage.length > 0) {
+					try {
+						this.#onDelivered?.(usage);
+					} catch {
+						// bookkeeping must never fail a send
+					}
+				}
 				return "ok";
 			}
 			const body = (await res.json().catch(() => ({}))) as { error?: string; index?: number; detail?: string };
@@ -111,6 +123,35 @@ export class Reporter {
 			return "retry";
 		}
 		return "ok";
+	}
+
+	/**
+	 * POSTs to the history function (same key, same host as ingest). Returns the
+	 * parsed body on success, or a SendResult describing the failure.
+	 */
+	async history<T>(body: unknown, timeoutMs = 30_000): Promise<{ ok: true; body: T } | { ok: false; result: SendResult }> {
+		const { apiKey, historyUrl } = this.#getConfig();
+		if (!apiKey) return { ok: false, result: "unauthorized" };
+		let res: Response;
+		try {
+			res = await this.#fetch(historyUrl, {
+				method: "POST",
+				headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(timeoutMs),
+			});
+		} catch (err) {
+			this.lastError = err instanceof Error ? err.message : String(err);
+			return { ok: false, result: "retry" };
+		}
+		const parsed = (await res.json().catch(() => ({}))) as T & { error?: string; detail?: string };
+		if (res.ok) return { ok: true, body: parsed };
+		this.lastError = `${res.status} ${parsed.error ?? ""} ${parsed.detail ?? ""}`.trim();
+		if (res.status === 401) {
+			this.#onUnauthorized?.();
+			return { ok: false, result: "unauthorized" };
+		}
+		return { ok: false, result: res.status === 400 || res.status === 413 ? "rejected" : "retry" };
 	}
 
 	enqueue(events: OutboundEvent[]): void {

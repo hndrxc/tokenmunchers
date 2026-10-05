@@ -24,7 +24,7 @@ export default async function Home() {
     supabase.from("usage_events").select(EVENT_COLUMNS).order("ts", { ascending: false }).limit(50),
     supabase.from("live_sessions").select("*").gte("last_seen", new Date(now - 90_000).toISOString()),
     supabase
-      .from("usage_daily")
+      .from("usage_daily_all")
       .select("user_id,day,provider,model,is_subagent,call_count,total_tokens,cost_usd")
       .gte("day", days[0]),
   ]);

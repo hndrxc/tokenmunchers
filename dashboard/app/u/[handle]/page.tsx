@@ -33,7 +33,7 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
   const todayKey = utcDay(now);
   const [dailyRes, weekRes, todayRes, allRes, eventsRes, liveRes] = await Promise.all([
     supabase
-      .from("usage_daily")
+      .from("usage_daily_all")
       .select("user_id,day,provider,model,is_subagent,call_count,total_tokens,cost_usd")
       .eq("user_id", profile.id),
     supabase.rpc("leaderboard_since", { p_since: new Date(now - 7 * 86_400_000).toISOString() }),
@@ -123,7 +123,7 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
             <h2 id="rc-h">Recent calls</h2>
           </div>
           {events.length === 0 ? (
-            <p className="empty">No calls in the last 30 days.</p>
+            <p className="empty">No calls in the last week.</p>
           ) : (
             <ul className="feed">
               {events.map((e) => (

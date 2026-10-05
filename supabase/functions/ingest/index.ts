@@ -6,11 +6,11 @@
 // Every field is checked against a strict allowlist; unknown fields reject the
 // whole request so nothing beyond usage metadata can ever be stored.
 
+import { bearerKey, json, rpc, sha256Hex, UUID_RE } from "../_shared/common.ts";
+
 const MAX_BATCH = 100;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_SKEW_MS = 5 * 60 * 1000;
-const KEY_RE = /^tm_[A-Za-z0-9_-]{43}$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Check = (v: unknown) => boolean;
 
@@ -82,41 +82,11 @@ function validate(event: unknown): string | null {
   return null;
 }
 
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function secretKey(): string {
-  const keys = Deno.env.get("SUPABASE_SECRET_KEYS");
-  if (keys) {
-    try {
-      const parsed = JSON.parse(keys) as Record<string, string>;
-      if (parsed.default) return parsed.default;
-    } catch {
-      // fall through to the legacy key
-    }
-  }
-  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!legacy) throw new Error("no secret key available");
-  return legacy;
-}
-
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SECRET_KEY = secretKey();
-
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json(405, { error: "method_not_allowed" });
 
-  const key = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
-  if (!KEY_RE.test(key)) return json(401, { error: "invalid_key" });
+  const key = bearerKey(req);
+  if (!key) return json(401, { error: "invalid_key" });
 
   const raw = await req.text();
   if (raw.length > 64 * 1024) return json(413, { error: "too_large" });
@@ -145,11 +115,7 @@ Deno.serve(async (req) => {
     if (problem) return json(400, { error: "invalid_event", index: i, detail: problem });
   }
 
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ingest`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", apikey: SECRET_KEY },
-    body: JSON.stringify({ p_key_hash: await sha256Hex(key), p_events: events }),
-  });
+  const res = await rpc("ingest", { p_key_hash: await sha256Hex(key), p_events: events });
   if (!res.ok) {
     console.error("ingest rpc failed", res.status, await res.text());
     return json(502, { error: "storage_failed" });
