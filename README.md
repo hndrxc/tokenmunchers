@@ -188,6 +188,7 @@ Backfill waits until queued calls have been delivered, so those calls don't get 
 | --- | --- | --- |
 | [`plugin/`](plugin/) | The `omp-tokenmunchers` OMP plugin (TypeScript, runs on Bun) | [plugin/README.md](plugin/README.md) |
 | [`dashboard/`](dashboard/) | The web dashboard (Next.js, deployed on Vercel) | [dashboard/README.md](dashboard/README.md) |
+| [`discord-bot/`](discord-bot/) | Guild slash-command bot for Discord (Node.js, discord.js) | [discord-bot/README.md](discord-bot/README.md) |
 | [`supabase/`](supabase/) | Database schema, security rules, scheduled jobs and Edge Functions | [supabase/README.md](supabase/README.md) |
 
-Running your own instance, administering members, and deploying are covered in the [Supabase](supabase/README.md) and [dashboard](dashboard/README.md) READMEs. Plugin development and releases are covered in the [plugin README](plugin/README.md).
+Running your own instance, administering members, running the Discord bot, and deploying are covered in the [Supabase](supabase/README.md), [discord-bot](discord-bot/README.md), and [dashboard](dashboard/README.md) READMEs. Plugin development and releases are covered in the [plugin README](plugin/README.md).

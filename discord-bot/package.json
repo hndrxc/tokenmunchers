@@ -1,0 +1,23 @@
+{
+  "name": "tokenmunchers-discord-bot",
+  "version": "0.1.0",
+  "description": "Discord bot providing private guild leaderboard for Tokenmunchers",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "start": "node --env-file=.env src/index.ts",
+    "register": "node --env-file=.env src/register.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "discord.js": "^14.18.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

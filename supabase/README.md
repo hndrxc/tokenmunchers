@@ -41,6 +41,7 @@ History and live data never overlap: the plugin uploads history only for calls m
 
 Members (signed-in users whose profile exists) can read every usage table, view and leaderboard function, plus other members' profiles. Each user can read only their own API keys. Clients have no write access to usage data, and can't call `ingest` or `ingest_history`.
 
+The Discord bot operates under a dedicated, read-only role (`tokenmunchers_discord_reader`) with no direct table access and no access to member-only functions. It can only execute the security-definer wrapper `public.discord_leaderboard(p_period)`.
 ### Functions
 
 | Function | Callable by | Description |
@@ -51,6 +52,7 @@ Members (signed-in users whose profile exists) can read every usage table, view 
 | `delete_my_account()` | Members | Deletes the caller's auth user (cascades) |
 | `ingest(key_hash, events)` | `service_role` | Stores usage events, updates presence, applies the rate limit |
 | `ingest_history(key_hash, action, device_id, reset, rows)` | `service_role` | History status and uploads |
+| `discord_leaderboard(p_period)` | `tokenmunchers_discord_reader` | Aggregated period totals (`today`/`week`/`all`) outer-joined across all profiles with zero-fill |
 
 ### Scheduled jobs (pg_cron)
 
@@ -108,6 +110,42 @@ insert into public.allowlist (email) values ('friend@example.com');
 ```
 
 Use the email of the person's GitHub or Discord account. It must be lowercase.
+
+### Provisioning the Discord bot database user
+
+The Discord bot connects directly to PostgreSQL and reads aggregated leaderboard totals. It is intentionally sandboxed to the minimum necessary database privileges:
+
+1. **Role and least privilege:**
+   Migration `20261026000000_discord_leaderboard.sql` creates the `tokenmunchers_discord_reader` role as `NOLOGIN`. It is granted `USAGE` on schema `public` and `EXECUTE` on `public.discord_leaderboard(text)`.
+   - The role has **no** `SELECT`, `INSERT`, `UPDATE`, or `DELETE` grants on any tables (`usage_events`, `usage_daily`, `profiles`, `api_keys`, `allowlist`).
+   - The wrapper function `public.discord_leaderboard(p_period)` runs as `SECURITY DEFINER` with `SET search_path = ''`. Its execution is revoked from `PUBLIC`, `anon`, and `authenticated`.
+   - The wrapper only exposes aggregated totals (`handle`, `display_name`, `total_tokens`, `subagent_tokens`, `cost_usd`) and strictly validates `p_period` (`today` for UTC day start, `week` for rolling 7 days, or `all` for all-time totals).
+
+2. **Create a dedicated LOGIN role:**
+   In the Supabase SQL Editor, provision a separate login user that inherits the reader role:
+
+   ```sql
+   CREATE ROLE tokenmunchers_bot WITH LOGIN PASSWORD 'strong-random-password' IN ROLE tokenmunchers_discord_reader;
+   ```
+
+   **Never** grant this user `SUPERUSER`, `BYPASSRLS`, `CREATEDB`, or `CREATEROLE`. Never use the Supabase `service_role` key or postgres administrative credentials for the Discord bot.
+
+3. **Construct the connection string:**
+   ```
+   postgresql://tokenmunchers_bot:<escaped_password>@<db_host>:5432/postgres?sslmode=verify-full
+   ```
+   - **Password escaping:** If the generated password contains special characters (such as `@`, `:`, `/`, `?`, or `#`), URL-encode them (e.g. `@` becomes `%40`).
+   - **Verified TLS:** Always require `sslmode=verify-full`. Do not omit `sslmode` or use `sslmode=require`, as omitting it allows plaintext and `require` may skip certificate verification. While `sslmode=verify-full` is standard in the connection URL, explicit driver TLS options verify the certificate chain and hostname in code.
+   - **Direct connection only:** Connect directly to PostgreSQL on port 5432 using username `tokenmunchers_bot`. Do not use Supabase transaction pooling (port 6543) because the bot client enables prepared statements (`prepare: true`), which transaction pooling mode does not support.
+
+4. **TLS Certificate Authority & Trust:**
+   Direct connections to Supabase PostgreSQL instances use certificates issued by Supabase's production root Certificate Authority (`Subject: Supabase Root 2021 CA`, expires `2031-04-26 10:56:53 UTC`). Because Node.js does not bundle this CA in its default trust store, direct connections require trusted CA configuration to avoid `SELF_SIGNED_CERT_IN_CHAIN` errors.
+   - **Automated bot trust:** The Discord bot automatically loads the official bundled Supabase production root CA (`discord-bot/certs/supabase-prod-ca.crt`) alongside Node's standard root certificates, maintaining strict TLS certificate chain validation and hostname verification (`rejectUnauthorized: true`).
+   - **Official sources:**
+     - Root CA download: [https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt](https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt)
+     - Supabase Studio source references: [custom-content.json#L63](https://github.com/supabase/supabase/blob/master/apps/studio/hooks/custom-content/custom-content.json#L63) and [SSLConfiguration.tsx#L114-L121](https://github.com/supabase/supabase/blob/master/apps/studio/components/interfaces/Settings/Database/SSLConfiguration.tsx#L114-L121)
+   - **Operator maintenance & rotation:** The bundled root CA certificate is valid through **2031-04-26**. On rotation or before expiration, replace `discord-bot/certs/supabase-prod-ca.crt` strictly from the official Supabase source and restart the bot process.
+   - **Security rules:** Never disable TLS verification (`rejectUnauthorized: false`), never use `NODE_TLS_REJECT_UNAUTHORIZED=0`, and do not configure `NODE_EXTRA_CA_CERTS` inside `.env` (Node `--env-file` cannot evaluate it before internal TLS startup).
 
 ## Deploying
 
