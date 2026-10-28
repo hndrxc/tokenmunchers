@@ -155,7 +155,7 @@ describe("Reporter", () => {
 	});
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-	const usage = () => toUsageEvent(assistantMessage, { id: "s", isSubagent: false })!;
+	const usage = () => toUsageEvent({ ...assistantMessage, timestamp: Date.now() }, { id: "s", isSubagent: false })!;
 	const respond = (status: number, body: unknown = {}) =>
 		new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 	const tick = () => new Promise((r) => setTimeout(r, 20));

@@ -8,7 +8,7 @@ import { Avatar } from "@/components/Avatar";
 import { DailyBars } from "@/components/DailyBars";
 import { Sparkline } from "@/components/Sparkline";
 import { ago, duration, model, tokens, usd } from "@/lib/format";
-import { addEvent, dailyByUser, LIVE_WINDOW_MS, metricOf, normalizeEvent, utcDay } from "@/lib/stats";
+import { addEvent, addNullable, dailyByUser, LIVE_WINDOW_MS, metricOf, normalizeEvent, utcDay } from "@/lib/stats";
 import { createClient } from "@/lib/supabase/client";
 import { subscribeAuthed } from "@/lib/supabase/realtime";
 import type { DailyRow, LiveSession, Profile, Totals, UsageEvent } from "@/lib/types";
@@ -58,11 +58,18 @@ export function Dashboard(props: DashboardProps) {
     const t = setInterval(() => {
       const n = Date.now();
       setNow(n);
+      if (n - props.serverNow > 30_000) router.refresh();
       if (utcDay(n) !== props.todayKey) router.refresh();
     }, 5000);
     setNow(Date.now());
     return () => clearInterval(t);
-  }, [props.todayKey, router]);
+  }, [props.todayKey, props.serverNow, router]);
+
+  useEffect(() => {
+    setWeek(props.week);
+    setToday(props.today);
+    setAllTime(props.allTime);
+  }, [props.week, props.today, props.allTime]);
 
   const ensureProfile = useCallback(async (userId: string) => {
     if (profilesRef.current[userId]) return;
@@ -137,16 +144,16 @@ export function Dashboard(props: DashboardProps) {
   const rows = useMemo(() => {
     return Object.values(profiles)
       .map((p) => ({ profile: p, t: totals[p.id], value: metricOf(totals[p.id], metric, includeSubagents) }))
-      .sort((a, b) => b.value - a.value || a.profile.display_name.localeCompare(b.profile.display_name));
+      .sort((a, b) => (a.value === null ? b.value === null ? 0 : 1 : b.value === null ? -1 : b.value - a.value) || a.profile.display_name.localeCompare(b.profile.display_name));
   }, [profiles, totals, metric, includeSubagents]);
 
   const groupDaily = useMemo(
-    () => props.days.map((day) => ({ day, value: Object.values(daily).reduce((s, u) => s + (u[day] ?? 0), 0) })),
+    () => props.days.map((day) => ({ day, value: Object.values(daily).reduce<number | null>((s, u) => addNullable(s, Object.hasOwn(u, day) ? u[day] : 0), 0) })),
     [daily, props.days],
   );
 
   const periodLabel = period === "today" ? "today (UTC)" : period === "week" ? "last 7 days" : "all time";
-  const groupTotal = rows.reduce((s, r) => s + r.value, 0);
+  const groupTotal = rows.reduce<number | null>((s, r) => addNullable(s, r.value), 0);
 
   return (
     <div className="stack">
@@ -240,7 +247,7 @@ export function Dashboard(props: DashboardProps) {
               <tbody>
                 {rows.map(({ profile: p, t, value }, i) => (
                   <tr key={p.id} style={value === 0 ? { opacity: 0.55 } : undefined}>
-                    <td className="rank">{value > 0 ? i + 1 : "–"}</td>
+                    <td className="rank">{value !== null && value > 0 ? i + 1 : "–"}</td>
                     <td>
                       <span className="who">
                         <Avatar profile={p} />
@@ -251,10 +258,12 @@ export function Dashboard(props: DashboardProps) {
                     <td className="spark-cell">
                       <Sparkline days={props.days} values={daily[p.id] ?? {}} label={p.display_name} />
                     </td>
-                    <td className="num calls sub">{t ? t.call_count.toLocaleString("en-US") : 0}</td>
+                    <td className="num calls sub">{t ? t.call_count === null ? "Unknown" : t.call_count.toLocaleString("en-US") : 0}</td>
                     <td className="num">
                       <span className="value">{metric === "tokens" ? tokens(value) : usd(value)}</span>
-                      {metric === "tokens" && includeSubagents && t && t.subagent_tokens > 0 && (
+                      {t?.has_estimated_cost && metric === "cost" && <div className="sub">includes estimates</div>}
+                      {t?.has_reconstructed && <div className="sub">includes reconstruction</div>}
+                      {metric === "tokens" && includeSubagents && t && t.subagent_tokens !== null && t.total_tokens !== null && t.subagent_tokens > 0 && (
                         <div className="sub" title="Share from subagent / swarm calls">
                           {pct(t.subagent_tokens, t.total_tokens)} subagent
                         </div>
@@ -266,7 +275,7 @@ export function Dashboard(props: DashboardProps) {
             </table>
             <p className="sub" style={{ margin: "10px 0 0" }}>
               {metric === "tokens" ? tokens(groupTotal) + " tokens" : usd(groupTotal)} across the group, {periodLabel}.
-              {metric === "cost" && " Cost is as reported by OMP and is $0 on subscription plans."}
+              {metric === "cost" && " Unavailable cost remains unknown; recorded estimates are not invoices."}
             </p>
           </section>
 
@@ -282,7 +291,7 @@ export function Dashboard(props: DashboardProps) {
         <section className="card" aria-labelledby="feed-h">
           <div className="card-head">
             <h2 id="feed-h">Activity</h2>
-            <span className="sub">every model call, as it lands</span>
+            <span className="sub">OMP calls, as they land; collector totals refresh periodically</span>
           </div>
           {feed.length === 0 ? (
             <p className="empty">No calls yet. Install the OMP plugin from Settings.</p>

@@ -13,9 +13,9 @@ export type LeaderboardMetric = "tokens" | "cost";
 export interface LeaderboardRow {
   handle: string;
   display_name: string | null;
-  total_tokens: number | string | bigint;
-  subagent_tokens: number | string | bigint;
-  cost_usd: number | string;
+  total_tokens: number | string | bigint | null;
+  subagent_tokens: number | string | bigint | null;
+  cost_usd: number | string | null;
 }
 
 export type LeaderboardLoader = (period: LeaderboardPeriod) => Promise<LeaderboardRow[]>;

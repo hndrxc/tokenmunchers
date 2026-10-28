@@ -6,7 +6,7 @@ import { dayLabel, tokens } from "@/lib/format";
 
 interface Point {
   day: string;
-  value: number;
+  value: number | null;
 }
 
 /** Single-series daily bar chart with hover tooltip and a table view. */
@@ -27,7 +27,7 @@ export function DailyBars({ points, unit = "tokens" }: { points: Point[]; unit?:
   const padT = 8;
   const plotW = w - padL;
   const plotH = h - padB - padT;
-  const max = niceMax(Math.max(0, ...points.map((p) => p.value)));
+  const max = niceMax(Math.max(0, ...points.flatMap(p => p.value === null ? [] : [p.value])));
   const col = plotW / points.length;
   const gap = 2;
   const bw = Math.max(2, col - gap);
@@ -47,10 +47,11 @@ export function DailyBars({ points, unit = "tokens" }: { points: Point[]; unit?:
         ))}
         {points.map((p, i) => {
           const x = padL + i * col + gap / 2;
-          const bh = p.value > 0 ? Math.max(2, (p.value / max) * plotH) : 0;
+          const bh = p.value !== null && p.value > 0 ? Math.max(2, (p.value / max) * plotH) : 0;
           return (
             <g key={p.day}>
               {bh > 0 && <path d={roundedTop(x, y(0) - bh, bw, bh, 0)} fill={hover === i ? "var(--bar-hover)" : "var(--bar)"} />}
+              {p.value === null && <text x={x + bw / 2} y={y(0) - 3} textAnchor="middle" className="tick">?</text>}
               <rect x={padL + i * col} y={padT} width={col} height={plotH} fill="transparent" onMouseEnter={() => setHover(i)} />
               {((w >= 480 ? i % 7 === (points.length - 1) % 7 : i % 14 === (points.length - 1) % 14) || i === points.length - 1) && (
                 <text className="tick" x={x + bw / 2} y={h - 6} textAnchor="middle">
@@ -62,7 +63,7 @@ export function DailyBars({ points, unit = "tokens" }: { points: Point[]; unit?:
         })}
       </svg>
       {hover !== null && (
-        <div className="tooltip" style={{ left: `${((padL + hover * col + col / 2) / w) * 100}%`, top: `${(y(points[hover].value) / h) * 100}%` }}>
+        <div className="tooltip" style={{ left: `${((padL + hover * col + col / 2) / w) * 100}%`, top: `${(y(points[hover].value ?? 0) / h) * 100}%` }}>
           <strong>{tokens(points[hover].value)} {unit}</strong>
           {hover === points.length - 1 ? "Today" : dayLabel(points[hover].day)}
         </div>
@@ -80,7 +81,7 @@ export function DailyBars({ points, unit = "tokens" }: { points: Point[]; unit?:
             {points.map((p) => (
               <tr key={p.day}>
                 <td>{p.day}</td>
-                <td>{p.value.toLocaleString("en-US")}</td>
+                <td>{p.value === null ? "Unknown" : p.value.toLocaleString("en-US")}</td>
               </tr>
             ))}
           </tbody>

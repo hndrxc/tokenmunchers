@@ -6,3 +6,6 @@ verify_jwt = false
 
 [functions.history]
 verify_jwt = false
+
+[functions.contributions]
+verify_jwt = false

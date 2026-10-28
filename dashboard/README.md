@@ -20,14 +20,25 @@ All reads run as the signed-in user, with row-level security (RLS) applied. The 
 
 | Data | Source |
 | --- | --- |
-| Today / this week totals | `leaderboard_since(timestamptz)`, over raw events |
-| All-time totals | `leaderboard_all_time()`: imported history, plus daily totals for past days, plus raw events for today |
-| Charts, streaks, model mix | `usage_daily_all` view (live daily totals + imported history) |
+| Today / this week totals | `leaderboard_since(timestamptz)`, over OMP raw events plus canonical collector contributions |
+| All-time totals | `leaderboard_all_time()`: OMP imported history, past daily totals and today's raw events, plus collector contributions once |
+| Charts, streaks, model mix | `usage_daily_all` view (OMP daily totals + imported history + published collector contributions) |
 | Activity feed, recent calls | `usage_events` |
 | Live now | `live_sessions` (a heartbeat in the last 90 s) |
-| Live updates | Supabase Realtime `INSERT`s on `usage_events` and changes to `live_sessions` |
+| Live updates | Supabase Realtime for OMP events/presence; aggregate refresh every 30 seconds also picks up atomic collector publications |
 
 The database is documented in the [Supabase README](../supabase/README.md).
+
+## Claude Code and Codex onboarding
+
+Deploy both collector migrations and the `contributions` Edge Function first; see the [backend protocol and deployment instructions](../supabase/README.md#post-functionsv1contributions). In Settings, create a source-labeled API key. Follow the [standalone collector README](../integrations/README.md) to select only intended source roots, preview accounting coverage/exclusions, confirm historical publication and activate incremental collection. OMP keeps its existing `/munch` commands and identities; it does not ingest Claude/Codex observations.
+
+Unavailable output, calls or USD are shown as **Unknown**, never zero, and unavailable leaderboard metrics are unranked. Null is absorbing in group totals, daily charts and model mix. Unknown chart days have `?` markers (and explicit table values); muted sparkline bars indicate unavailable days, not measured usage. Cost estimates and reconstructed usage are labeled; neither reconstructed intervals nor session summaries become invented calls. A day with recorded usage can establish activity even when its total is unavailable; “Biggest day” remains unknown if any daily total is unavailable.
+
+Collector totals do not manufacture live presence or OMP activity-feed entries. Those sections explicitly describe OMP calls. Strong canonical IDs are owned once per user/harness across devices; copied archives with conflicting owners require resolution rather than changing IDs. Weak archive identities require a single source owner. Previously accepted contributions survive source cleanup and interrupted/replayed snapshot publication. Source logs are not complete billing ledgers; the collector preview reports skipped/uncertain coverage.
+
+Totals change only when a snapshot commits. A large first import shares the API key's per-minute request budget with the OMP plugin, so the collector waits for the server's `Retry-After` reset and resumes where it stopped. Expect such an import to take several minutes before the dashboard shows it, all at once.
+
 
 ## Local development
 
@@ -63,3 +74,5 @@ Every push to `main` redeploys.
 | `components/` | Leaderboard, charts, live updates and the Windows 95 chrome |
 | `lib/stats.ts` | Total and streak calculations, UTC day helpers |
 | `lib/supabase/` | Browser, server and Realtime clients, and the session proxy |
+
+Nullable aggregation and display checks are in `test/accounting.test.mjs`; run `node --test dashboard/test/accounting.test.mjs` from the repository root, plus `npm --prefix dashboard run typecheck` and `npm --prefix dashboard run build`. These commands are release gates, not evidence that they have already run.

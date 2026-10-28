@@ -1,4 +1,5 @@
-export function tokens(n: number): string {
+export function tokens(n: number | null): string {
+  if (n === null) return "Unknown";
   if (n >= 1e9) return `${trim(n / 1e9)}B`;
   if (n >= 1e6) return `${trim(n / 1e6)}M`;
   if (n >= 1e3) return `${trim(n / 1e3)}k`;
@@ -9,7 +10,8 @@ function trim(n: number): string {
   return n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1).replace(/\.0$/, "") : n.toFixed(2).replace(/\.?0+$/, "");
 }
 
-export function usd(n: number): string {
+export function usd(n: number | null): string {
+  if (n === null) return "Unknown";
   if (n === 0) return "$0";
   if (n < 0.01) return "<$0.01";
   if (n >= 1000) return `$${Math.round(n).toLocaleString("en-US")}`;

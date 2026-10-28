@@ -1,0 +1,1 @@
+{"type":"assistant","sessionId":"session-parent","agentId":"child-a","isSidechain":true,"uuid":"child-uuid","requestId":"request-child","timestamp":"2026-10-21T00:00:02.000Z","message":{"id":"message-child","role":"assistant","model":"claude-test","usage":{"input_tokens":11,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"stop_reason":"end_turn"}}

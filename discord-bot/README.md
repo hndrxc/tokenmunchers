@@ -19,7 +19,7 @@ A standalone Discord bot providing a private `/leaderboard` slash command for [t
 
 - **Node.js >= 22.18.0** (native TypeScript execution via type stripping)
 - **npm**
-- **Supabase / PostgreSQL database** with migration `20261026000000_discord_leaderboard.sql` applied
+- **Supabase / PostgreSQL database** with all migrations through `20261028010000_quality_accounting.sql` applied
 - **Discord Developer account** with permissions to manage applications and invite bots to your target server
 
 ---
@@ -56,7 +56,8 @@ The bot accesses PostgreSQL directly through a dedicated database user granted o
 - **Zero raw table grants:** The role has **no** `SELECT`, `INSERT`, `UPDATE`, or `DELETE` permissions on tables (`usage_events`, `usage_daily`, `profiles`, `api_keys`, `allowlist`).
 - **Definer wrapper:** `public.discord_leaderboard(p_period)` runs as `SECURITY DEFINER` with `SET search_path = ''`. Execution permissions are revoked from `PUBLIC`, `anon`, and `authenticated`, and granted strictly to `tokenmunchers_discord_reader`.
 - **Safe output:** The wrapper returns only aggregated statistics (`handle`, `display_name`, `total_tokens`, `subagent_tokens`, `cost_usd`). It never exposes auth IDs, emails, or per-call timestamps.
-- **Profile coverage:** Outer-joins `public.profiles` so all registered members appear, with inactive profiles zero-filled.
+- **Profile coverage:** Outer-joins `public.profiles` so all registered members appear. Only profiles with no usage receive zeros; unavailable accounting stays `null`.
+- **Collector compatibility:** Canonical Claude Code/Codex contributions enter the same period totals once. Unavailable tokens/cost display **Unknown**, are unranked, and propagate to the group total rather than becoming fake zeros. Main-only totals stay unknown when subagent attribution is missing. Notes explain that collector usage may be reconstructed and USD can be reported or estimated, not invoices. The bot's role gains no raw/staging table privileges.
 
 ### Provisioning the Login User
 

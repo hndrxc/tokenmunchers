@@ -335,3 +335,23 @@ describe("handleLeaderboardCommand execution seam", () => {
     assert.ok(!replyStr.includes("SELECT super_secret"));
   });
 });
+
+describe("quality-aware nullable accounting", () => {
+  const unknown: LeaderboardRow = { handle: "unknown", display_name: "Unknown", total_tokens: null, subagent_tokens: null, cost_usd: null };
+  const known: LeaderboardRow = { handle: "known", display_name: "Known", total_tokens: 120n, subagent_tokens: 20n, cost_usd: "1.25" };
+  it("preserves unknown tokens and cost without ranking fake zeros", () => {
+    for (const metric of ["tokens", "cost"] as const) {
+      const result = formatLeaderboard([unknown, known], { metric });
+      assert.equal(result.rows[0].handle, "known");
+      assert.equal(result.rows[1].score, null);
+      assert.equal(result.rows[1].scoreDisplay, "Unknown");
+      assert.equal(result.rows[1].rank, "–");
+      assert.match(result.groupTotalDisplay, /^Unknown/);
+    }
+  });
+  it("does not invent main-only totals when subagent attribution is unavailable", () => {
+    const result = formatLeaderboard([{ ...known, subagent_tokens: null }], { subagents: false });
+    assert.equal(result.rows[0].score, null);
+    assert.equal(result.rows[0].subagentShareText, null);
+  });
+});

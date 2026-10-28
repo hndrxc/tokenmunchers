@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"session-parent","uuid":"dispatch-user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"synthetic dispatch result"}]}}
+{"type":"progress","sessionId":"session-parent","data":{"type":"agent_progress","agentId":"child-a"}}
+{"type":"system","sessionId":"session-parent","subtype":"compact_boundary","compactMetadata":{"trigger":"auto"}}
+{"type":"summary","leafUuid":"synthetic-leaf","summary":"synthetic conversation summary, not usage"}

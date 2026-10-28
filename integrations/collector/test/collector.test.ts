@@ -1,0 +1,60 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, mkdir, copyFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Collector } from '../src/collector.ts';
+import { Ledger } from '../../shared/src/ledger.ts';
+import type { Observation, ScanOptions } from '../../shared/src/observations.ts';
+import { scan as claude } from '../../claude-code/src/adapter.ts';
+import { scan as codex } from '../../codex/src/adapter.ts';
+const fixture: Observation = JSON.parse(await readFile(new URL('../../shared/test/fixtures/observation.json', import.meta.url), 'utf8'));
+
+ test('bounded scan resumes protected progress and reports unavailable/skipped fields locally', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'tokenmunchers-collector-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const ledger = new Ledger(directory);
+  await ledger.activate('codex', '/explicit/selected', '2026-01-02T00:00:00Z', ['sessions/private']);
+  const calls: Array<{ root: string; options?: ScanOptions }> = [];
+  const adapter = async (root: string, options?: ScanOptions) => {
+    calls.push({ root, options });
+    return { observations: [fixture], diagnostics: [{ code: 'DEFERRED_RANGE', message: 'Synthetic bounded scan deferred' }], continuation: calls.length === 1 ? { nextFile: 'sessions/next.jsonl' } : { nextFile: null }, projects: ['synthetic-project'], progress: { files: 1, bytesRead: 100, deferred: calls.length === 1 ? 1 : 0 } };
+  };
+  const collector = new Collector(ledger, { codex: adapter, 'claude-code': adapter });
+  const first = await collector.scan('codex', { maxBytes: 1000 });
+  const next = await new Collector(new Ledger(directory), { codex: adapter, 'claude-code': adapter }).scan('codex', { maxBytes: 1000 });
+  assert.equal(calls[0].root, '/explicit/selected');
+  assert.deepEqual(calls[0].options?.exclude, ['sessions/private']);
+  assert.equal(calls[1].options?.continuation?.nextFile, 'sessions/next.jsonl');
+  assert.equal(first.history, 1);
+  assert.equal(first.live, 0);
+  assert.equal(next.retained_contributions, 1);
+  assert.equal(JSON.stringify(first).includes('synthetic-project'), true);
+  assert.deepEqual(first.unknown, { input_tokens: 0, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0, call_count: 1, cost_usd: 1, timestamp: 0, is_subagent: 1, provider: 1 });
+ });
+
+ test('both actual adapters feed the same retention-safe collector without source privacy leakage', async t => {
+  const temporary = await mkdtemp(join(tmpdir(), 'tokenmunchers-fixture-smoke-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const codexRoot = join(temporary, 'codex');
+  const claudeRoot = join(temporary, 'claude');
+  await mkdir(join(codexRoot, 'sessions'), { recursive: true });
+  await mkdir(join(claudeRoot, 'projects', 'synthetic-project'), { recursive: true });
+  await copyFile(new URL('../../codex/test/fixtures/modern-source-derived.jsonl', import.meta.url), join(codexRoot, 'sessions', 'rollout-fixture.jsonl'));
+  await copyFile(new URL('../../claude-code/test/fixtures/streaming.jsonl', import.meta.url), join(claudeRoot, 'projects', 'synthetic-project', 'session.jsonl'));
+  const ledger = new Ledger(join(temporary, 'state'));
+  await ledger.activate('codex', codexRoot);
+  await ledger.activate('claude-code', claudeRoot);
+  const collector = new Collector(ledger, { codex, 'claude-code': claude });
+  const codexPreview = await collector.scan('codex');
+  const claudePreview = await collector.scan('claude-code');
+  assert.ok(Number(codexPreview.retained_contributions) > 0);
+  assert.ok(Number(claudePreview.retained_contributions) > 0);
+  const initial = JSON.stringify(await ledger.transaction(state => Object.fromEntries(Object.entries(state.sources).map(([harness, source]) => [harness, source!.records]))));
+  assert.equal(initial.includes('"message"'), false);
+  assert.equal(initial.includes('"content"'), false);
+  await rm(codexRoot, { recursive: true });
+  await rm(claudeRoot, { recursive: true });
+  assert.equal((await collector.preview('codex')).retained_contributions, codexPreview.retained_contributions);
+  assert.equal((await collector.preview('claude-code')).retained_contributions, claudePreview.retained_contributions);
+ });

@@ -2,6 +2,11 @@ import type { DailyRow, Totals, UsageEvent } from "./types";
 
 export const LIVE_WINDOW_MS = 90_000;
 
+/** Unavailable is absorbing: adding a known value cannot repair an unknown total. */
+export function addNullable(a: number | null, b: number | null): number | null {
+  return a === null || b === null ? null : Number(a) + Number(b);
+}
+
 export function utcDay(d: Date | number = Date.now()): string {
   return new Date(d).toISOString().slice(0, 10);
 }
@@ -33,7 +38,7 @@ export function emptyTotals(user_id: string): Totals {
 
 export function byUser(rows: Totals[] | null): Record<string, Totals> {
   const out: Record<string, Totals> = {};
-  for (const r of rows ?? []) out[r.user_id] = { ...r, cost_usd: Number(r.cost_usd) };
+  for (const r of rows ?? []) out[r.user_id] = { ...r, cost_usd: r.cost_usd === null ? null : Number(r.cost_usd) };
   return out;
 }
 
@@ -44,22 +49,23 @@ export function addEvent(map: Record<string, Totals>, e: UsageEvent): Record<str
     ...map,
     [e.user_id]: {
       ...prev,
-      call_count: prev.call_count + 1,
-      input_tokens: prev.input_tokens + e.input_tokens,
-      output_tokens: prev.output_tokens + e.output_tokens,
-      cache_read_tokens: prev.cache_read_tokens + e.cache_read_tokens,
-      cache_write_tokens: prev.cache_write_tokens + e.cache_write_tokens,
-      total_tokens: prev.total_tokens + e.total_tokens,
-      subagent_tokens: prev.subagent_tokens + (e.is_subagent ? e.total_tokens : 0),
-      cost_usd: prev.cost_usd + Number(e.cost_usd),
+      call_count: addNullable(prev.call_count, 1),
+      input_tokens: addNullable(prev.input_tokens, e.input_tokens),
+      output_tokens: addNullable(prev.output_tokens, e.output_tokens),
+      cache_read_tokens: addNullable(prev.cache_read_tokens, e.cache_read_tokens),
+      cache_write_tokens: addNullable(prev.cache_write_tokens, e.cache_write_tokens),
+      total_tokens: addNullable(prev.total_tokens, e.total_tokens),
+      subagent_tokens: addNullable(prev.subagent_tokens, e.is_subagent ? e.total_tokens : 0),
+      cost_usd: addNullable(prev.cost_usd, Number(e.cost_usd)),
     },
   };
 }
 
-export function metricOf(t: Totals | undefined, metric: "tokens" | "cost", includeSubagents: boolean): number {
+export function metricOf(t: Totals | undefined, metric: "tokens" | "cost", includeSubagents: boolean): number | null {
   if (!t) return 0;
   if (metric === "cost") return t.cost_usd;
-  return includeSubagents ? t.total_tokens : t.total_tokens - t.subagent_tokens;
+  if (includeSubagents) return t.total_tokens;
+  return t.total_tokens === null || t.subagent_tokens === null ? null : t.total_tokens - t.subagent_tokens;
 }
 
 /**
@@ -71,12 +77,13 @@ export function dailyByUser(
   today: Record<string, Totals>,
   includeSubagents: boolean,
   todayKey: string = utcDay(),
-): Record<string, Record<string, number>> {
-  const out: Record<string, Record<string, number>> = {};
+): Record<string, Record<string, number | null>> {
+  const out: Record<string, Record<string, number | null>> = {};
   for (const r of rows) {
-    if (r.day >= todayKey || (!includeSubagents && r.is_subagent)) continue;
+    if (r.day >= todayKey || (!includeSubagents && r.is_subagent === true)) continue;
     const u = (out[r.user_id] ??= {});
-    u[r.day] = (u[r.day] ?? 0) + Number(r.total_tokens);
+    const value = !includeSubagents && r.is_subagent === null ? null : r.total_tokens;
+    u[r.day] = addNullable(Object.hasOwn(u, r.day) ? u[r.day] : 0, value);
   }
   for (const [uid, t] of Object.entries(today)) {
     (out[uid] ??= {})[todayKey] = metricOf(t, "tokens", includeSubagents);

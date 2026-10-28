@@ -11,6 +11,7 @@ export function LiveRefresh({ userId }: { userId: string }) {
   const router = useRouter();
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = setInterval(() => router.refresh(), 30_000);
     const unsubscribe = subscribeAuthed(createClient(), (supabase) =>
       supabase
         .channel(`profile-${userId}`)
@@ -22,6 +23,7 @@ export function LiveRefresh({ userId }: { userId: string }) {
     );
     return () => {
       clearTimeout(timer);
+      clearInterval(poll);
       unsubscribe();
     };
   }, [userId, router]);

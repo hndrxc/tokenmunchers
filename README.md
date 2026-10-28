@@ -4,6 +4,8 @@ A live, invite-only leaderboard of AI token usage for a group of friends.
 
 The `omp-tokenmunchers` plugin for [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) reports the token counts of every model call. A [web dashboard](https://tokenmunchers.taiisshort.com) ranks everyone in real time: who's online, today's and this week's totals, all-time totals, and per-model breakdowns.
 
+Usage from **Claude Code** and the **Codex CLI** can be added with a separate command-line [collector](integrations/README.md) that reads the usage those tools already record on disk.
+
 - **Real time.** A finished model call shows up on the dashboard in about a second.
 - **Metadata only.** Token counts, model names and timestamps. Never prompts, responses, code or file paths.
 - **Complete history.** Imports your usage from before you installed the plugin, and recovers calls that were missed.
@@ -15,6 +17,7 @@ The `omp-tokenmunchers` plugin for [Oh My Pi (OMP)](https://github.com/can1357/o
 
 - [Getting started](#getting-started)
 - [Using the plugin](#using-the-plugin)
+- [Claude Code and Codex](#claude-code-and-codex)
 - [Privacy](#privacy)
 - [Troubleshooting](#troubleshooting)
 - [How it works](#how-it-works)
@@ -126,6 +129,40 @@ The full command reference and configuration options are in the [plugin README](
 
 ---
 
+## Claude Code and Codex
+
+The standalone collector in [`integrations/`](integrations/README.md) reads the token usage that Claude Code and the Codex CLI already save on disk. It uploads metadata only, to its own endpoint, separately from the OMP plugin. It needs **Node.js 26 or newer** and has no runtime dependencies.
+
+```sh
+cd integrations
+
+# Choose each source root explicitly; nothing else on disk is scanned.
+npm run collect -- activate --source codex --root ~/.codex
+npm run collect -- activate --source claude-code --root ~/.claude
+
+# Scan locally and review the preview. Nothing is uploaded.
+npm run collect -- preview --source codex
+
+# Upload with a dashboard API key (read from the environment, never saved).
+export TOKENMUNCHERS_API_KEY=tm_...
+npm run collect -- sync --source codex \
+  --endpoint https://fywgkzqgtitpwijweojk.supabase.co/functions/v1/contributions --confirm-upload
+
+# Optional: keep collecting every minute.
+npm run collect -- watch --source codex \
+  --endpoint https://fywgkzqgtitpwijweojk.supabase.co/functions/v1/contributions --confirm-upload
+```
+
+- **Activation time is the cutoff.** Usage recorded before it counts as history, and usage at or after it as live. Classification always uses each response's original timestamp, and the cutoff never moves.
+- **`pause` / `resume`** work per source: `npm run collect -- pause --source codex`. Usage recorded while paused is never uploaded, even after you resume. `status` shows everything local, including unknown values and what is pending.
+- **Unknown stays unknown.** When a transcript doesn't record output tokens, cost or call counts, the dashboard shows them as unknown instead of zero.
+- **One collector per archive.** Run only one collector per set of session files. A copied archive uploaded from a second machine is rejected as an ownership conflict instead of being counted twice.
+- Local state lives in `~/.local/state/tokenmunchers-collector` (change it with `--state`).
+
+Every command, flag, the upload protocol and its limits are in the [collector README](integrations/README.md).
+
+---
+
 ## Privacy
 
 For each model call the plugin sends the **provider, model, token counts, cost, timestamp, session id and a subagent flag**. Nothing else.
@@ -135,6 +172,7 @@ For each model call the plugin sends the **provider, model, token counts, cost, 
 - **Pause** at any time with `/munch pause`. Calls made while paused are never uploaded, now or later.
 - **History imports** (`/munch backfill`) are opt-in, show a preview first, and send only daily totals.
 - **Delete your account** from Settings to permanently remove everything you've ever sent.
+- **Claude Code / Codex collector** uploads are opt-in per source: they need `--confirm-upload` and show a preview first. Each response sends only harness, canonical response id and its strength, accounting grain, original timestamp or interval, provider, model, session/parent session id, subagent flag, four token categories, call count, cost and cost basis, and a quality label. Unknown values are sent as unknown. Nothing is read from paths you didn't select, and prompts, responses, tool content and file paths are never sent. See the [collector README](integrations/README.md#delivery-protocol).
 
 See [exactly which fields are sent](plugin/README.md#data-sent) in the plugin README.
 
@@ -172,13 +210,16 @@ Backfill waits until queued calls have been delivered, so those calls don't get 
 ```
  OMP + plugin ──── per call ────▶ ingest  (Edge Function) ──▶ Postgres ──Realtime──▶ Dashboard
       │                                                           ▲
-      └──── /munch backfill ────▶ history (Edge Function) ────────┘
+      └──── /munch backfill ────▶ history (Edge Function) ────────┤
+                                                                  │
+ Claude Code / Codex ── collector ──▶ contributions ──────────────┘
 ```
 
 1. When a model call finishes, the plugin sends its token counts immediately. If the network is down, the call is queued on disk and retried.
 2. The `ingest` Edge Function checks the request's fields and API key and stores the call. Each call has an ID, so a repeated send is stored only once.
 3. Database jobs add calls up into daily totals every 10 minutes. Per-call data is kept for about a week; daily totals are kept forever.
 4. The dashboard subscribes to new calls over Supabase Realtime, so it updates without reloading.
+5. The Claude Code/Codex collector uploads full snapshots of its local ledger to `contributions` in stages: begin, chunks, then one atomic commit. Each canonical response is stored once and owned by one device, and the daily views count it alongside OMP usage.
 
 ---
 
@@ -190,5 +231,6 @@ Backfill waits until queued calls have been delivered, so those calls don't get 
 | [`dashboard/`](dashboard/) | The web dashboard (Next.js, deployed on Vercel) | [dashboard/README.md](dashboard/README.md) |
 | [`discord-bot/`](discord-bot/) | Guild slash-command bot for Discord (Node.js, discord.js) | [discord-bot/README.md](discord-bot/README.md) |
 | [`supabase/`](supabase/) | Database schema, security rules, scheduled jobs and Edge Functions | [supabase/README.md](supabase/README.md) |
+| [`integrations/`](integrations/) | Standalone Claude Code / Codex collector and source adapters (TypeScript, Node.js ≥ 26) | [integrations/README.md](integrations/README.md) |
 
 Running your own instance, administering members, running the Discord bot, and deploying are covered in the [Supabase](supabase/README.md), [discord-bot](discord-bot/README.md), and [dashboard](dashboard/README.md) READMEs. Plugin development and releases are covered in the [plugin README](plugin/README.md).

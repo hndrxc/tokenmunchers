@@ -5,17 +5,25 @@ export interface Profile {
   avatar_url: string | null;
 }
 
+export interface AccountingQuality {
+  has_unknown_tokens?: boolean;
+  has_unknown_cost?: boolean;
+  has_unknown_calls?: boolean;
+  has_estimated_cost?: boolean;
+  has_reconstructed?: boolean;
+}
+
 /** One row of leaderboard / leaderboard_since / leaderboard_all_time. */
-export interface Totals {
+export interface Totals extends AccountingQuality {
   user_id: string;
-  call_count: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  total_tokens: number;
-  subagent_tokens: number;
-  cost_usd: number;
+  call_count: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  total_tokens: number | null;
+  subagent_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface UsageEvent {
@@ -43,15 +51,15 @@ export interface LiveSession {
   last_seen: string;
 }
 
-export interface DailyRow {
+export interface DailyRow extends AccountingQuality {
   user_id: string;
   day: string;
   provider: string;
   model: string;
-  is_subagent: boolean;
-  call_count: number;
-  total_tokens: number;
-  cost_usd: number;
+  is_subagent: boolean | null;
+  call_count: number | null;
+  total_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface ApiKey {

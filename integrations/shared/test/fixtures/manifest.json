@@ -1,0 +1,8 @@
+{
+  "fixtures": [{
+    "path": "observation.json",
+    "provenance": "Explicitly synthetic normalized observation, authored for collector behavior tests. Not a Claude/Codex real session or wire-format fixture.",
+    "coverage": ["nullable counters", "unknown provider", "UTC cutoff", "canonical replay", "retention", "staged delivery"],
+    "limits": ["Does not establish parser coverage, provider correctness, real final output or financial completeness."]
+  }]
+}

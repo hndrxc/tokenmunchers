@@ -1,0 +1,72 @@
+{
+  "fixtures": [
+    {
+      "path": "modern-source-derived.jsonl",
+      "kind": "synthetic",
+      "provenance": "Hand-authored source-derived projection of upstream TokenUsageRecord rollout lines modeled on token_usage_rollout.rs (A=120, B=80, C=30) at pinned openai/codex commit 6562117a81a9457c9d67a4d15b884bf80e7805f7. cli_version is deliberately 'source-derived-not-a-release'. Not a captured session.",
+      "coverage": ["per-response usage vs cumulative turn/thread totals", "response_id deduplication", "response without usage emits nothing", "null provider stays unknown", "plain and zstd discovery (copied by tests)"],
+      "limits": ["Does not prove any released CLI writes exactly these lines.", "No cache-write, reasoning, lineage or legacy content."]
+    },
+    {
+      "path": "legacy-synthetic.jsonl",
+      "kind": "synthetic",
+      "provenance": "Hand-authored EventMsg::TokenCount snapshots shaped after upstream TokenUsageInfo, including the fill_to_context_window shape (total_tokens = context window, zero categories). Not a captured legacy rollout.",
+      "coverage": ["initial baseline only", "recognized 110-token interval with cache read/write conversion", "call_count null", "synthetic overflow discard (200000)", "explicit provider"],
+      "limits": ["No released legacy CLI version was captured; legacy reconstruction is unvalidated against real retained rollouts."]
+    },
+    {
+      "path": "builders.ts",
+      "kind": "synthetic",
+      "provenance": "Runtime builders for synthetic rows used by the accounting/reader regressions (resets, compaction, mixed stitching, fork/subagent ownership, budgets, symlinks, corrupt zstd).",
+      "coverage": ["all synthetic edge cases listed in ../../README.md"],
+      "limits": ["Accounting projections of pinned upstream structs only; never real sessions."]
+    },
+    {
+      "path": "codex-0.154.0-real-metadata.jsonl",
+      "kind": "real-redacted-metadata",
+      "capture": {
+        "cli": "Codex CLI 0.154.0 (installed binary, parent-run `codex exec` then resume of the same thread)",
+        "codex_home": "parent-created isolated root /tmp/tokenmunchers-smoke-EKLNb6/codex (not a user home)",
+        "source_file": "sessions/2026/10/27/rollout-2026-10-27T19-40-22-01a17ff3-700b-76b2-be96-40479393c5f8.jsonl",
+        "source_range": "lines 1-30 only (first exec turn and first resume turn, ordinals 0-29)",
+        "source_range_sha256": "4c9091fcf2ff7dbbbb8381660cbf4d1d5157f0134448d267eb4baba576457732",
+        "fixture_sha256": "4a6bcd34ce40f71543344cd9df1b905ae721f14a28cd957b0730d33482cf3f06",
+        "redaction": "jq allowlist (filter below); every other row type and field dropped",
+        "jq_filter": "select(.type==\"session_meta\" or .type==\"turn_context\" or .type==\"token_usage_record\" or .type==\"compacted\" or (.type==\"event_msg\" and .payload.type==\"token_count\")) | if .type==\"session_meta\" then {timestamp, type, ordinal, payload: (.payload | {id, session_id, forked_from_id, parent_thread_id, cli_version, model_provider, subagent_history_start_ordinal, source: (if (.source|type)==\"string\" then .source elif (.source.subagent.thread_spawn|type)==\"object\" then {subagent: {thread_spawn: (.source.subagent.thread_spawn | {parent_thread_id, depth})}} else \"redacted-unrecognized\" end)} | with_entries(select(.value != null)))} elif .type==\"turn_context\" then {timestamp, type, ordinal, payload: (.payload | {model, turn_id, root_turn_id} | with_entries(select(.value != null)))} elif .type==\"token_usage_record\" then {timestamp, type, ordinal, payload: (.payload | {response_id, thread_id, session_id, turn_id, root_turn_id, usage, turn_token_usage, thread_token_usage})} elif .type==\"compacted\" then {timestamp, type, ordinal, payload: {}} else {timestamp, type, ordinal, payload: {type: \"token_count\", info: (.payload.info | {total_token_usage, last_token_usage, model_context_window})}} end",
+        "dropped": ["base_instructions", "cwd", "originator", "context_window", "history_mode", "thread_source", "turn_context policies/cwd/workspace roots", "rate_limits", "response_item messages and tool calls", "world_state", "inter_agent_communication_metadata", "task/item events"]
+      },
+      "reconciliation": "Three token_usage_record responses: 14584 + 14667 + 14701 = 43952 total (wire input 43889, cached 40960, output 63, cache write 0). The parent's resume stdout turn.completed usage (input 43889, cached 40960, output 63) is thread-cumulative, not a turn delta; the rollout's final thread_token_usage in this range equals the three-record sum.",
+      "coverage": ["real 0.154.0 modern record shape", "per-response vs cumulative totals", "cumulative token_count snapshots that duplicate modern usage are not re-counted", "explicit provider/model", "inclusive wire input to disjoint conversion"],
+      "limits": [
+        "The source rollout later grew (a final parent turn added responses ordinals 41, 47, 56; whole parent thread cumulative input 94185, cached 83968, output 153, total 94338). That later range is intentionally NOT in this fixture.",
+        "No cache-write, reasoning, compaction, zstd, legacy-only or mixed legacy/modern transition occurs in the captured range.",
+        "One provider/model and one machine; not evidence for other CLI versions."
+      ]
+    },
+    {
+      "path": "codex-0.154.0-real-subagent-metadata.jsonl",
+      "kind": "real-redacted-metadata",
+      "capture": {
+        "cli": "Codex CLI 0.154.0, spawned by the parent thread's final isolated attempt",
+        "codex_home": "same isolated root /tmp/tokenmunchers-smoke-EKLNb6/codex",
+        "source_file": "sessions/2026/10/27/rollout-2026-10-27T19-43-50-01a17ff6-9bdc-7da2-9eea-21e205e2fb4e.jsonl",
+        "source_range": "whole file as observed at capture (33 lines, ordinals 0-32, 92208 bytes)",
+        "source_sha256": "0ae29b9f492a431ef0214190355378df78925a8f96ebae89e5a36f2a0606d17e",
+        "fixture_sha256": "839da98c987b1f9ce94781f76ff98bc40df5e41752bbef47e55f5528aa8dad18",
+        "redaction": "same jq allowlist as codex-0.154.0-real-metadata.jsonl; source.subagent.thread_spawn keeps only parent_thread_id and depth (agent_path, agent_nickname, agent_role dropped)"
+      },
+      "reconciliation": "One own token_usage_record (ordinal 30, thread_id = child): input 16440, cached 0, cache write 0, output 9, total 16449. It is a distinct response_id and is not contained in the parent's thread cumulative 94338 (the six parent responses alone sum to 94338). Expected whole-root total for the captured isolated root: 94338 + 16449 = 110787 across 7 responses.",
+      "observed_shape": [
+        "source spelled `subagent` (pinned upstream serde spelling is `sub_agent`)",
+        "forked_from_id and parent_thread_id both name the parent; subagent_history_start_ordinal = 21",
+        "ordinal 1 replays the PARENT session_meta; ordinals 6, 11, 18 replay parent turn_context rows; all are below the ownership boundary"
+      ],
+      "coverage": ["real child lineage", "inherited-prefix boundary", "replayed parent session_meta does not replace child identity", "child-local response counted once"],
+      "limits": [
+        "Parent exec stdout showed only a collab wait with empty receiver_thread_ids; the child generation is evidenced solely by this on-disk rollout, not by stdout.",
+        "Single depth-1 spawn with one response and no legacy deltas; it does not prove every child response is recorded or that deeper/nested spawns share this shape.",
+        "No inherited token_usage_record rows occur below the boundary in this capture, so inherited modern pruning is covered only synthetically."
+      ]
+    }
+  ]
+}

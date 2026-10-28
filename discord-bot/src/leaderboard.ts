@@ -14,7 +14,7 @@ export interface FormattedLeaderboardRow {
   displayName: string;
   escapedDisplayName: string;
   rank: string;
-  score: bigint | number;
+  score: bigint | number | null;
   scoreDisplay: string;
   subagentShareText: string | null;
   line: string;
@@ -61,11 +61,11 @@ export function formatLeaderboard(
   type InternalEntry = {
     handle: string;
     displayName: string;
-    score: bigint | number;
-    costScore: number;
-    tokenScore: bigint;
-    subagentTokens: bigint;
-    totalTokens: bigint;
+    score: bigint | number | null;
+    costScore: number | null;
+    tokenScore: bigint | null;
+    subagentTokens: bigint | null;
+    totalTokens: bigint | null;
     isZero: boolean;
   };
 
@@ -73,14 +73,10 @@ export function formatLeaderboard(
     const rawName = r.display_name?.trim();
     const displayName = rawName && rawName.length > 0 ? rawName : r.handle;
 
-    const cost = typeof r.cost_usd === "number" ? r.cost_usd : parseFloat(String(r.cost_usd || 0)) || 0;
-    const total = BigInt(r.total_tokens ?? 0);
-    const sub = BigInt(r.subagent_tokens ?? 0);
-    let effectiveTokens = total;
-    if (!includeSubagents) {
-      effectiveTokens = total - sub;
-      if (effectiveTokens < 0n) effectiveTokens = 0n;
-    }
+    const cost = r.cost_usd === null ? null : Number(r.cost_usd);
+    const total = r.total_tokens === null ? null : BigInt(r.total_tokens);
+    const sub = r.subagent_tokens === null ? null : BigInt(r.subagent_tokens);
+    const effectiveTokens = includeSubagents ? total : total === null || sub === null ? null : total - sub;
 
     if (metric === "cost") {
       return {
@@ -109,6 +105,9 @@ export function formatLeaderboard(
 
   // Sort: Descending score then display_name.localeCompare
   entries.sort((a, b) => {
+    if (a.score === null || b.score === null) {
+      return a.score === b.score ? a.displayName.localeCompare(b.displayName) : a.score === null ? 1 : -1;
+    }
     if (metric === "cost") {
       const diff = (b.score as number) - (a.score as number);
       if (diff !== 0) return diff;
@@ -126,11 +125,11 @@ export function formatLeaderboard(
   // Calculate group total across all entries
   let groupTotalDisplay: string;
   if (metric === "cost") {
-    const totalCost = entries.reduce((sum, e) => sum + e.costScore, 0);
-    groupTotalDisplay = formatUsd(totalCost);
+    const totalCost = entries.reduce<number | null>((sum, e) => sum === null || e.costScore === null ? null : sum + e.costScore, 0);
+    groupTotalDisplay = totalCost === null ? "Unknown cost" : formatUsd(totalCost);
   } else {
-    const totalTokens = entries.reduce((sum, e) => sum + e.tokenScore, 0n);
-    groupTotalDisplay = `${formatTokens(totalTokens)} tokens`;
+    const totalTokens = entries.reduce<bigint | null>((sum, e) => sum === null || e.tokenScore === null ? null : sum + e.tokenScore, 0n);
+    groupTotalDisplay = totalTokens === null ? "Unknown tokens" : `${formatTokens(totalTokens)} tokens`;
   }
 
   // Notes
@@ -140,13 +139,15 @@ export function formatLeaderboard(
   } else if (!includeSubagents) {
     notes.push("Main session tokens only (subagent tokens excluded).");
   }
+  if (entries.some(e => e.score === null)) notes.push("Unavailable totals are unknown, not zero, and are not ranked.");
+  notes.push("Collector totals can include reconstructed usage; costs are not invoices.");
 
   // Slice page entries first, then format only the requested page
   const startIndex = (page - 1) * PAGE_SIZE;
   const pageEntries = entries.slice(startIndex, startIndex + PAGE_SIZE);
 
   const pageRows: FormattedLeaderboardRow[] = pageEntries.map((entry, idx) => {
-    const rank = entry.isZero ? "–" : String(startIndex + idx + 1);
+    const rank = entry.isZero || entry.score === null ? "–" : String(startIndex + idx + 1);
     const truncatedName = entry.displayName.length > 40 ? entry.displayName.slice(0, 39) + "…" : entry.displayName;
     const escapedDisplayName = escapeDiscordMarkdown(truncatedName);
 
@@ -154,10 +155,10 @@ export function formatLeaderboard(
     let subagentShareText: string | null = null;
 
     if (metric === "cost") {
-      scoreDisplay = formatUsd(entry.costScore);
+      scoreDisplay = entry.costScore === null ? "Unknown" : formatUsd(entry.costScore);
     } else {
-      scoreDisplay = formatTokens(entry.tokenScore);
-      if (includeSubagents && entry.subagentTokens > 0n && entry.totalTokens > 0n) {
+      scoreDisplay = entry.tokenScore === null ? "Unknown" : formatTokens(entry.tokenScore);
+      if (includeSubagents && entry.subagentTokens !== null && entry.totalTokens !== null && entry.subagentTokens > 0n && entry.totalTokens > 0n) {
         const pct = Math.round((Number(entry.subagentTokens) / Number(entry.totalTokens)) * 100);
         if (pct > 0) {
           subagentShareText = `${pct}% subagent`;

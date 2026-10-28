@@ -7,7 +7,7 @@ import { ModelBars, type ModelShare } from "@/components/ModelBars";
 import { Nav } from "@/components/Nav";
 import { ago, model, tokens, usd } from "@/lib/format";
 import { getMe } from "@/lib/me";
-import { lastDays, LIVE_WINDOW_MS, startOfUtcDay, streaks, utcDay } from "@/lib/stats";
+import { addNullable, lastDays, LIVE_WINDOW_MS, startOfUtcDay, streaks, utcDay } from "@/lib/stats";
 import { createClient } from "@/lib/supabase/server";
 import { EVENT_COLUMNS, type DailyRow, type Totals, type UsageEvent } from "@/lib/types";
 
@@ -34,7 +34,7 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
   const [dailyRes, weekRes, todayRes, allRes, eventsRes, liveRes] = await Promise.all([
     supabase
       .from("usage_daily_all")
-      .select("user_id,day,provider,model,is_subagent,call_count,total_tokens,cost_usd")
+      .select("user_id,day,provider,model,is_subagent,call_count,total_tokens,cost_usd,has_estimated_cost,has_reconstructed")
       .eq("user_id", profile.id),
     supabase.rpc("leaderboard_since", { p_since: new Date(now - 7 * 86_400_000).toISOString() }),
     supabase.rpc("leaderboard_since", { p_since: startOfUtcDay(now) }),
@@ -53,10 +53,10 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
   const isLive = !!live && now - Date.parse(live.last_seen) < LIVE_WINDOW_MS;
 
   // Past days from rollups; today from exact raw totals.
-  const perDay: Record<string, number> = {};
-  for (const r of daily) if (r.day < todayKey) perDay[r.day] = (perDay[r.day] ?? 0) + Number(r.total_tokens);
+  const perDay: Record<string, number | null> = {};
+  for (const r of daily) if (r.day < todayKey) perDay[r.day] = addNullable(Object.hasOwn(perDay, r.day) ? perDay[r.day] : 0, r.total_tokens);
   if (today) perDay[todayKey] = today.total_tokens;
-  const activeDays = Object.entries(perDay).filter(([, v]) => v > 0).map(([d]) => d);
+  const activeDays = [...new Set(daily.filter(r => r.total_tokens === null || r.total_tokens > 0).map(r => r.day))];
   const { current, longest } = streaks(activeDays, now);
 
   const mix = new Map<string, ModelShare>();
@@ -64,13 +64,15 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
     if (r.day < days[0]) continue;
     const key = `${r.provider}/${r.model}`;
     const m = mix.get(key) ?? { provider: r.provider, model: r.model, total_tokens: 0, cost_usd: 0, calls: 0 };
-    m.total_tokens += Number(r.total_tokens);
-    m.cost_usd += Number(r.cost_usd);
-    m.calls += Number(r.call_count);
+    m.total_tokens = addNullable(m.total_tokens, r.total_tokens);
+    m.cost_usd = addNullable(m.cost_usd, r.cost_usd);
+    m.calls = addNullable(m.calls, r.call_count);
     mix.set(key, m);
   }
-  const mixRows = [...mix.values()].sort((a, b) => b.total_tokens - a.total_tokens).slice(0, 8);
-  const bestDay = Object.entries(perDay).sort((a, b) => b[1] - a[1])[0];
+  const mixTotal = [...mix.values()].reduce<number | null>((sum, row) => addNullable(sum, row.total_tokens), 0);
+  const mixRows = [...mix.values()].sort((a, b) => (b.total_tokens ?? -1) - (a.total_tokens ?? -1)).slice(0, 8);
+  const incompleteDays = Object.values(perDay).some(v => v === null);
+  const bestDay = Object.entries(perDay).filter((entry): entry is [string, number] => entry[1] !== null).sort((a, b) => b[1] - a[1])[0];
 
   return (
     <>
@@ -91,13 +93,13 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
 
       <div className="stack">
         <section className="card tiles" aria-label="Stats">
-          <Tile label="This week" value={tokens(week?.total_tokens ?? 0)} hint={`${(week?.call_count ?? 0).toLocaleString("en-US")} calls · ${usd(week?.cost_usd ?? 0)}`} />
-          <Tile label="All time" value={tokens(all?.total_tokens ?? 0)} hint={`${(all?.call_count ?? 0).toLocaleString("en-US")} calls · ${usd(Number(all?.cost_usd ?? 0))}`} />
+          <Tile label="This week" value={tokens(week ? week.total_tokens : 0)} hint={`${week ? week.call_count === null ? "Unknown" : week.call_count.toLocaleString("en-US") : 0} calls · ${usd(week ? week.cost_usd : 0)}${week?.has_estimated_cost ? " (includes estimates)" : ""}${week?.has_reconstructed ? " · reconstructed usage" : ""}`} />
+          <Tile label="All time" value={tokens(all ? all.total_tokens : 0)} hint={`${all ? all.call_count === null ? "Unknown" : all.call_count.toLocaleString("en-US") : 0} calls · ${usd(all ? all.cost_usd === null ? null : Number(all.cost_usd) : 0)}${all?.has_estimated_cost ? " (includes estimates)" : ""}${all?.has_reconstructed ? " · reconstructed usage" : ""}`} />
           <Tile label="Current streak" value={`${current} ${current === 1 ? "day" : "days"}`} hint={`Longest: ${longest} ${longest === 1 ? "day" : "days"}`} />
           <Tile
             label="Biggest day"
-            value={bestDay ? tokens(bestDay[1]) : "–"}
-            hint={bestDay ? new Date(`${bestDay[0]}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : "no usage yet"}
+            value={incompleteDays ? "Unknown" : bestDay ? tokens(bestDay[1]) : "–"}
+            hint={incompleteDays ? "Some daily totals are unavailable" : bestDay ? new Date(`${bestDay[0]}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : "no usage yet"}
           />
         </section>
 
@@ -107,20 +109,22 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
               <h2 id="pd-h">Tokens per day</h2>
               <span className="sub">last 30 days, UTC</span>
             </div>
-            <DailyBars points={days.map((day) => ({ day, value: perDay[day] ?? 0 }))} />
+            <DailyBars points={days.map((day) => ({ day, value: Object.hasOwn(perDay, day) ? perDay[day] : 0 }))} />
           </section>
           <section className="card" aria-labelledby="mm-h">
             <div className="card-head">
               <h2 id="mm-h">Model mix</h2>
               <span className="sub">last 30 days</span>
             </div>
-            <ModelBars rows={mixRows} />
+            <ModelBars rows={mixRows} totalTokens={mixTotal} />
+            {daily.some(r => r.has_estimated_cost) && <p className="sub">Costs include estimates, not invoices.</p>}
+            {daily.some(r => r.has_reconstructed) && <p className="sub">Includes reconstructed usage; unavailable counts remain unknown.</p>}
           </section>
         </div>
 
         <section className="card" aria-labelledby="rc-h">
           <div className="card-head">
-            <h2 id="rc-h">Recent calls</h2>
+            <h2 id="rc-h">Recent OMP calls</h2>
           </div>
           {events.length === 0 ? (
             <p className="empty">No calls in the last week.</p>

@@ -97,6 +97,23 @@ export function SettingsClient({ profile, keys }: { profile: Profile; keys: ApiK
 
       <section className="card">
         <div className="card-head">
+          <h2>Connect Claude Code or Codex</h2>
+        </div>
+        <p>
+          Use the separate standalone collector in the repository&apos;s <code>integrations/README.md</code>.
+          Create a source-labeled API key below, select explicit transcript roots, preview coverage and exclusions,
+          then confirm publication. Each source has independent pause state and an immutable activation cutoff.
+        </p>
+        <p className="sub">
+          Only normalized accounting metadata is uploaded, never transcript content or paths.
+          Unknown output, calls and cost stay unknown; estimates and reconstructed usage are labeled.
+          Accepted usage survives source cleanup. Copied archives must retain a single owner; do not change IDs to bypass ownership conflicts.
+          Collector totals refresh periodically; live presence and the activity feed remain OMP-only.
+        </p>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
           <h2>API keys</h2>
           <span className="sub">one per machine is handy</span>
         </div>
