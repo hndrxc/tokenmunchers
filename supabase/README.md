@@ -182,7 +182,7 @@ Use the email of the person's GitHub or Discord account. It must be lowercase.
 
 ### Provisioning the Discord bot database user
 
-The Discord bot connects directly to PostgreSQL and reads aggregated leaderboard totals. It is intentionally sandboxed to the minimum necessary database privileges:
+The Discord bot connects to PostgreSQL and reads aggregated leaderboard totals. It is intentionally sandboxed to the minimum necessary database privileges:
 
 1. **Role and least privilege:**
    Migration `20261026000000_discord_leaderboard.sql` creates the `tokenmunchers_discord_reader` role as `NOLOGIN`. It is granted `USAGE` on schema `public` and `EXECUTE` on `public.discord_leaderboard(text)`.
@@ -200,15 +200,27 @@ The Discord bot connects directly to PostgreSQL and reads aggregated leaderboard
    **Never** grant this user `SUPERUSER`, `BYPASSRLS`, `CREATEDB`, or `CREATEROLE`. Never use the Supabase `service_role` key or postgres administrative credentials for the Discord bot.
 
 3. **Construct the connection string:**
+
+   ```bash
+   # Option A: Direct connection (requires IPv6 connectivity or Supabase IPv4 Add-on)
+   postgresql://tokenmunchers_bot:<escaped_password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=verify-full
+
+   # Option B: Shared session pooler (for IPv4-only or unrouted IPv6 hosts)
+   postgresql://tokenmunchers_bot.<project-ref>:<escaped_password>@<pooler_host>:5432/postgres?sslmode=verify-full
    ```
-   postgresql://tokenmunchers_bot:<escaped_password>@<db_host>:5432/postgres?sslmode=verify-full
-   ```
+
+   - **Connection modes & hostnames:**
+     - **Direct connection (port 5432):** Connect to `db.<project-ref>.supabase.co:5432` with username `tokenmunchers_bot` when IPv6 connectivity or the Supabase IPv4 Add-on is available. Direct Supabase database domains resolve to IPv6 addresses by default; on IPv4-only hosts or hosts without an IPv6 default route, connection attempts will fail with `ENETUNREACH`.
+     - **Shared session pooler (port 5432):** For IPv4-only hosts or networks without IPv6 routing, connect via Supabase's shared session pooler on port `5432`. Obtain the exact pooler hostname from the Supabase Dashboard under **Connect → Session pooler** (e.g., `aws-0-<region>.pooler.supabase.com`); do **not** derive the pooler hostname from the AWS region name.
+     - **Custom role pooler username:** Pooler connections require the username format `[role].[project-ref]` (e.g., `tokenmunchers_bot.<project-ref>`). Direct connections use plain `tokenmunchers_bot`.
+   - **Prepared statements supported on port 5432:** Both direct and session pooler modes on port 5432 fully support prepared statements (`prepare: true`), which the bot requires.
+   - **Transaction pooler (port 6543) incompatible:** Do **not** use Supabase transaction pooling on port 6543 because transaction poolers do not support prepared statements.
+   - **Official documentation:** See the [Supabase Postgres Connection Guide](https://supabase.com/docs/guides/database/connecting-to-postgres) for upstream details on direct vs. session pooler modes and custom role username syntax.
    - **Password escaping:** If the generated password contains special characters (such as `@`, `:`, `/`, `?`, or `#`), URL-encode them (e.g. `@` becomes `%40`).
    - **Verified TLS:** Always require `sslmode=verify-full`. Do not omit `sslmode` or use `sslmode=require`, as omitting it allows plaintext and `require` may skip certificate verification. While `sslmode=verify-full` is standard in the connection URL, explicit driver TLS options verify the certificate chain and hostname in code.
-   - **Direct connection only:** Connect directly to PostgreSQL on port 5432 using username `tokenmunchers_bot`. Do not use Supabase transaction pooling (port 6543) because the bot client enables prepared statements (`prepare: true`), which transaction pooling mode does not support.
 
 4. **TLS Certificate Authority & Trust:**
-   Direct connections to Supabase PostgreSQL instances use certificates issued by Supabase's production root Certificate Authority (`Subject: Supabase Root 2021 CA`, expires `2031-04-26 10:56:53 UTC`). Because Node.js does not bundle this CA in its default trust store, direct connections require trusted CA configuration to avoid `SELF_SIGNED_CERT_IN_CHAIN` errors.
+   Connections to Supabase PostgreSQL instances use certificates issued by Supabase's production root Certificate Authority (`Subject: Supabase Root 2021 CA`, expires `2031-04-26 10:56:53 UTC`). Because Node.js does not bundle this CA in its default trust store, direct connections require trusted CA configuration to avoid `SELF_SIGNED_CERT_IN_CHAIN` errors.
    - **Automated bot trust:** The Discord bot automatically loads the official bundled Supabase production root CA (`discord-bot/certs/supabase-prod-ca.crt`) alongside Node's standard root certificates, maintaining strict TLS certificate chain validation and hostname verification (`rejectUnauthorized: true`).
    - **Official sources:**
      - Root CA download: [https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt](https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt)

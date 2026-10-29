@@ -48,7 +48,7 @@ A standalone Discord bot providing a private `/leaderboard` slash command for [t
 
 ## 2. Database Provisioning & Least Privilege
 
-The bot accesses PostgreSQL directly through a dedicated database user granted only the `tokenmunchers_discord_reader` role.
+The bot connects to PostgreSQL through a dedicated database user granted only the `tokenmunchers_discord_reader` role.
 
 ### Security Architecture
 
@@ -73,14 +73,25 @@ CREATE ROLE tokenmunchers_bot WITH LOGIN PASSWORD 'your-strong-random-password' 
 
 ### Connection String Formatting
 
-```
-DATABASE_URL=postgresql://tokenmunchers_bot:<escaped_password>@<db_host>:5432/postgres?sslmode=verify-full
+Depending on your host's network routing (IPv6 availability), configure `DATABASE_URL` using either a direct connection or the shared session pooler on port 5432:
+
+```bash
+# Option A: Direct connection (requires IPv6 connectivity or Supabase IPv4 Add-on)
+DATABASE_URL=postgresql://tokenmunchers_bot:<escaped_password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=verify-full
+
+# Option B: Shared session pooler (for IPv4-only or unrouted IPv6 hosts)
+DATABASE_URL=postgresql://tokenmunchers_bot.<project-ref>:<escaped_password>@<pooler_host>:5432/postgres?sslmode=verify-full
 ```
 
+- **Connection Modes & Hostnames:**
+  - **Direct connection (port 5432):** Connect to `db.<project-ref>.supabase.co:5432` with username `tokenmunchers_bot` when the host has IPv6 connectivity or the project has the Supabase IPv4 Add-on enabled. Direct Supabase database domains resolve to IPv6 addresses by default; if the host lacks an active IPv6 default route, connection attempts will fail with `ENETUNREACH`.
+  - **Shared session pooler (port 5432):** For IPv4-only hosts or environments without an IPv6 default route, connect via Supabase's shared session pooler on port `5432`. You must look up the exact pooler hostname in your Supabase Dashboard under **Connect → Session pooler** (e.g., `aws-0-<region>.pooler.supabase.com`); do **not** derive the pooler hostname from the region name.
+  - **Custom role pooler username:** When connecting through the pooler, Supabase requires the username to include the project reference: `[role].[project-ref]` (e.g., `tokenmunchers_bot.<project-ref>`). Direct connections use plain `tokenmunchers_bot`.
+- **Prepared statements supported on port 5432:** Both direct connection and session pooler modes on port 5432 fully support prepared statements (`prepare: true`), which the bot client enables.
+- **Transaction pooler (port 6543) incompatible:** Do **not** use Supabase transaction pooling on port 6543. Transaction poolers do not support prepared statements.
+- **Official documentation:** See the [Supabase Postgres Connection Guide](https://supabase.com/docs/guides/database/connecting-to-postgres) for upstream details on direct vs. session pooler modes and custom role username syntax.
 - **Password escaping:** If the generated password contains special characters (`@`, `:`, `/`, `?`, `#`, etc.), URL-encode them (e.g. `@` becomes `%40`, `:` becomes `%3A`).
 - **Verified TLS:** Always include `sslmode=verify-full`. Do not omit `sslmode` or use `sslmode=require`, as omitting it allows unencrypted plaintext connections and `require` may skip certificate verification. While `sslmode=verify-full` is standard in the connection URL, explicit driver TLS options verify the certificate chain and hostname in code.
-- **Direct connection only:** Connect directly to PostgreSQL on port 5432 using the plain username `tokenmunchers_bot`. Do not use Supabase transaction pooling (port 6543) because the bot client enables prepared statements (`prepare: true`), which transaction poolers do not support.
-
 ### TLS Certificate Authority & Trust
 
 Remote Supabase PostgreSQL instances use SSL certificates issued by Supabase's production root Certificate Authority (`Subject: Supabase Root 2021 CA`, expiring `2031-04-26 10:56:53 UTC`). Because Node.js does not include Supabase's private root CA in its default Mozilla trust store, standard Node TLS connections fail with `SELF_SIGNED_CERT_IN_CHAIN`.
@@ -123,9 +134,10 @@ Remote Supabase PostgreSQL instances use SSL certificates issued by Supabase's p
    DISCORD_APPLICATION_ID=your_application_id_here
    DISCORD_GUILD_ID=your_guild_id_here
 
-   # PostgreSQL connection string
+   # PostgreSQL connection string (direct on IPv6 or session pooler on IPv4)
    DATABASE_URL=postgresql://tokenmunchers_bot:password@db.example.supabase.co:5432/postgres?sslmode=verify-full
-
+   # Or when using IPv4 session pooler:
+   # DATABASE_URL=postgresql://tokenmunchers_bot.exampleproject:password@aws-0-us-east-2.pooler.supabase.com:5432/postgres?sslmode=verify-full
    # Optional: link the embed title to the web dashboard (must be http:// or https://)
    DASHBOARD_URL=https://tokenmunchers.taiisshort.com
    ```
@@ -137,7 +149,7 @@ Remote Supabase PostgreSQL instances use SSL certificates issued by Supabase's p
 | `DISCORD_TOKEN` | Yes | Discord Bot Token from the Developer Portal. |
 | `DISCORD_APPLICATION_ID` | Yes | Discord Application (Client) ID. |
 | `DISCORD_GUILD_ID` | Yes | Server ID where the bot operates. |
-| `DATABASE_URL` | Yes | PostgreSQL connection string for the `tokenmunchers_bot` user. |
+| `DATABASE_URL` | Yes | PostgreSQL connection string for the `tokenmunchers_bot` user (or `tokenmunchers_bot.<project-ref>` via session pooler). |
 | `DASHBOARD_URL` | No | Web dashboard URL to link in embed titles. Validated for `http:` or `https:`. |
 
 ---
@@ -253,7 +265,8 @@ To inspect the `stderr` logs:
 | `[42501]` | Insufficient privilege on `discord_leaderboard` | Dedicated login role was not created `IN ROLE tokenmunchers_discord_reader` or role grants are missing. Verify role inheritance in Supabase. |
 | `[28P01]` | Authentication failed | Incorrect database username or password in `DATABASE_URL`. If the password contains special characters (`@`, `:`, `/`), URL-encode them. |
 | `[ENOTFOUND]`, `[EAI_AGAIN]` | Hostname DNS resolution failed | Check the database host domain in `DATABASE_URL`. Verify server network connectivity and DNS resolution. |
-| `[ECONNREFUSED]`, `[ETIMEDOUT]` | Connection refused or timed out | Database host is unavailable, port 5432 is blocked by firewall, or transaction pooler port (6543) was specified instead of direct port 5432. |
+| `[ECONNREFUSED]`, `[ETIMEDOUT]` | Connection refused or timed out | Database host is unavailable, port 5432 is blocked by firewall, or transaction pooler port (6543) was specified instead of direct or session pooler port 5432. |
+| `[ENETUNREACH]` | Network unreachable (IPv6 route mismatch) | Direct Supabase hosts (`db.<project-ref>.supabase.co`) resolve to IPv6, which fails on IPv4-only networks or hosts without an active IPv6 default route. Switch `DATABASE_URL` to Supabase's shared session pooler on port 5432 (`aws-0-<region>.pooler.supabase.com:5432`) with username `tokenmunchers_bot.<project-ref>`, or enable IPv6 routing / Supabase IPv4 Add-on. |
 | `/leaderboard` does not appear in Discord | Slash command not registered or wrong server | Run `npm run register`. Verify `DISCORD_GUILD_ID` matches your server ID. |
 | Bot replies: *"This command is only authorized for use within the configured server."* | Command received outside configured guild | The bot only operates inside `DISCORD_GUILD_ID`. Check that your server ID in `.env` matches the server. |
 | Bot fails to reply or says *"The application did not respond"* | Missing channel permissions | Ensure the bot has `View Channel`, `Send Messages`, and `Embed Links` permissions in that channel. |
