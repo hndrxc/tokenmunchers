@@ -71,6 +71,7 @@ Every push to `main` redeploys.
 | Path | Contents |
 | --- | --- |
 | `app/` | Routes, layouts and server components |
+| `app/icon.svg` | Browser tab icon (pixel-art muncher); Next.js emits its `<link rel="icon">` automatically |
 | `components/` | Leaderboard, charts, live updates and the Windows 95 chrome |
 | `lib/stats.ts` | Total and streak calculations, UTC day helpers |
 | `lib/supabase/` | Browser, server and Realtime clients, and the session proxy |
