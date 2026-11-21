@@ -16,6 +16,12 @@ Create an API key on the dashboard's Settings page, then run this inside OMP:
 /munch login tm_…
 ```
 
+`munch install` (see the [munch program](../proxy/README.md)) can do this for you: it installs this plugin and gives it your API key (omp-tm).
+
+`/munch` here is the command inside OMP. `munch` in a terminal is the separate local proxy program.
+
+If OMP is routed through the munch proxy and this plugin is enabled, each call is counted twice. `munch install` prevents this by running `omp` without the proxy variables.
+
 ## Commands
 
 Everything is under one command, `/munch`, with tab completion:
