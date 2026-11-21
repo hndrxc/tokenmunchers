@@ -161,22 +161,28 @@ munch exec -- codex
 
 #### 4. Codex (ChatGPT sign-in)
 
-Codex signed in with ChatGPT does not read the proxy environment variables: it takes its ChatGPT backend URL from the `chatgpt_base_url` setting in `~/.codex/config.toml` (user-level config only — Codex ignores the key in project-scoped `.codex/config.toml`). Wire it to the `chatgpt` route manually:
+Codex signed in with ChatGPT does not read the proxy environment variables, and Codex 0.171+ rejects a plain-HTTP `chatgpt_base_url` ("workspace backend must use an HTTPS origin without credentials"). Instead, add a custom model provider in the user-level `config.toml` (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`; Codex ignores project-scoped `.codex/config.toml` for this). If you set `chatgpt_base_url` to a plain-HTTP `munch` URL earlier, remove that line: leave `chatgpt_base_url` unset so Codex keeps using its default backend for account discovery.
 
 ```bash
 munch routes --show-local-urls   # print the private route URLs; treat them as secrets
 ```
 
-Copy the `chatgpt` route URL (it looks like `http://127.0.0.1:8787/_tm/<secret>/chatgpt`) and set it in `~/.codex/config.toml`, appending the `/backend-api/` suffix Codex expects:
+Copy the `chatgpt` route URL (it looks like `http://127.0.0.1:8787/_tm/<secret>/chatgpt`) and add, at the top level of the file (before any `[table]`), the provider selection, then the provider table with `/backend-api/codex` appended:
 
 ```toml
-chatgpt_base_url = "http://127.0.0.1:8787/_tm/<secret>/chatgpt/backend-api/"
+model_provider = "munch_chatgpt"
+
+[model_providers.munch_chatgpt]
+name = "Munch"
+base_url = "http://127.0.0.1:8787/_tm/<secret>/chatgpt/backend-api/codex"
+wire_api = "responses"
+requires_openai_auth = true
 ```
 
-Then restart Codex (start a new `codex` process) and make a request. The proxy forwards everything after the route name verbatim, so `…/chatgpt/backend-api/…` reaches `https://chatgpt.com/backend-api/…` exactly as in Codex's default configuration.
+Then restart Codex (start a new `codex` process) and make a request. `requires_openai_auth = true` reuses your existing ChatGPT sign-in. The proxy forwards everything after the route name verbatim, so `…/chatgpt/backend-api/codex/…` reaches `https://chatgpt.com/backend-api/codex/…`. This was tested with Codex 0.171.0.
 
 - **Keep the URL private:** it contains the capability secret. Don't put it in shared config, tickets, screenshots, or logs.
-- **What is and isn't routed:** this covers Codex's model-API traffic only. Sign-in itself still happens directly with OpenAI, and the proxy serves HTTP/SSE only — it rejects WebSocket upgrades (HTTP 426), so any Codex feature that needs a WebSocket transport will not work through it. Only calls that actually go through the proxy are recorded.
+- **What is and isn't routed:** this sends Codex's model responses through `munch` with your existing ChatGPT sign-in; other first-party ChatGPT functionality is not claimed to be routed, and the default backend is still used for account discovery. Sign-in itself still happens directly with OpenAI, and the proxy serves HTTP/SSE only — it rejects WebSocket upgrades (HTTP 426). Only calls that actually go through the proxy are recorded.
 - **Using an API key instead?** Codex then talks to the `openai` route: set `openai_base_url` in `~/.codex/config.toml` to the same URL `munch env` exports as `OPENAI_BASE_URL` for other OpenAI-compatible clients.
 
 ---
@@ -187,7 +193,7 @@ Then restart Codex (start a new `codex` process) and make a request. The proxy f
 | --- | --- | --- | --- |
 | `anthropic` | `https://api.anthropic.com` | Anthropic Messages (JSON + SSE) | `ANTHROPIC_BASE_URL` |
 | `openai` | `https://api.openai.com` | OpenAI Chat + Responses (JSON + SSE) | `OPENAI_BASE_URL` (includes `/v1`) |
-| `chatgpt` | `https://chatgpt.com` | ChatGPT / Codex Responses (SSE) | None emitted — set Codex's `chatgpt_base_url` manually |
+| `chatgpt` | `https://chatgpt.com` | ChatGPT / Codex Responses (SSE) | None emitted — add Codex's `munch_chatgpt` provider manually |
 | `gemini` | `https://generativelanguage.googleapis.com` | Gemini GenerateContent (JSON + SSE) | `GEMINI_API_BASE_URL`, `GOOGLE_GEMINI_BASE_URL` |
 | `xai` | `https://api.x.ai` | OpenAI-compatible + `cost_in_usd_ticks` | `XAI_BASE_URL` (includes `/v1`) |
 | `grok` | `https://api.x.ai` | OpenAI-compatible + `cost_in_usd_ticks` | `GROK_MODELS_BASE_URL` |
