@@ -50,14 +50,17 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o munch.exe ./cmd/munch
 
 ### Cut a release
 
-Once the GitHub Actions workflow is on `main`, tag the commit you want to ship with `munch-vMAJOR.MINOR.PATCH` and push the tag:
+From the repository root on `main`, run the release helper with the next version:
 
 ```bash
-git tag munch-v0.1.0
-git push origin munch-v0.1.0
+bash .github/scripts/release-munch 0.1.1
 ```
 
-The workflow tests `proxy/`, builds Linux and macOS archives for `amd64` and `arm64`, and publishes them with `SHA256SUMS`. `munch --version` and the usage client's version both use the numeric version from the tag. Untagged source builds default to `0.1.0`. To set a version in a manual build from `proxy/`:
+The helper pushes the release commit to `origin/main` first, then creates and pushes the annotated `munch-v0.1.1` tag in a separate push. Don't send `main` and the tag in one push: GitHub recorded only the branch run when we did that for `v0.1.0`.
+
+The tag push starts the `munch` workflow. It tests `proxy/`, builds Linux and macOS archives for `amd64` and `arm64`, and publishes them with `SHA256SUMS`. If the tag is on GitHub but no tag run appears in Actions, start the same workflow with `gh workflow run munch.yml --ref munch-v0.1.1`. If only the tag push failed, retry it with `git push --no-follow-tags origin refs/tags/munch-v0.1.1`.
+
+`munch --version` and the usage client's version both use the numeric version from the tag. Untagged source builds default to `0.1.0`. To set a version in a manual build from `proxy/`:
 
 ```bash
 go build -ldflags '-X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=0.1.1' ./cmd/munch

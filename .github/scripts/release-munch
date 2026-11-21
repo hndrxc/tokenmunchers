@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#
+# release-munch — cut a munch release from local main.
+#
+# Usage (from repo root, on branch main):
+#   bash .github/scripts/release-munch MAJOR.MINOR.PATCH
+#
+# Flow:
+#   1. Validate exactly one version argument; reject leading zeros (matches the
+#      munch.yml tag regex).
+#   2. Require the current branch to be `main`.
+#   3. Resolve the exact commit of main once.
+#   4. Reject an existing local tag before doing any work.
+#   5. Push that exact commit to origin main via an explicit refspec
+#      (--no-follow-tags, no force, fail fast).
+#   6. Create the annotated munch-vVERSION tag at that same commit.
+#   7. Push only the full tag ref in a separate invocation.
+#
+# On a failed tag push the local tag is left intact (no auto-deletion) so you
+# can inspect or re-push it manually.
+
+set -euo pipefail
+
+usage() {
+    echo "usage: bash .github/scripts/release-munch MAJOR.MINOR.PATCH" >&2
+    echo "example: bash .github/scripts/release-munch 0.1.1" >&2
+}
+
+version_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+if [[ $# -ne 1 ]]; then
+    echo "error: exactly one version argument is required" >&2
+    usage
+    exit 2
+fi
+
+VERSION=$1
+TAG="munch-v${VERSION}"
+
+if [[ ! "$VERSION" =~ $version_re ]]; then
+    echo "error: invalid version '$VERSION'; expected MAJOR.MINOR.PATCH with no leading zeros (e.g. 0.1.1)" >&2
+    exit 2
+fi
+
+# Require the current branch to be main.
+branch=$(git symbolic-ref --short -q HEAD || true)
+if [[ -z "$branch" ]]; then
+    echo "error: not on a branch (detached HEAD); check out 'main' first" >&2
+    exit 1
+fi
+if [[ "$branch" != "main" ]]; then
+    echo "error: must be on branch 'main' (currently on '$branch'); switch to main before releasing" >&2
+    exit 1
+fi
+
+# Resolve main's commit exactly once.
+commit=$(git rev-parse HEAD)
+
+# Reject an existing local tag before doing any work.
+if git rev-parse --verify -q "refs/tags/$TAG" >/dev/null; then
+    existing=$(git rev-parse --short "refs/tags/$TAG^{commit}")
+    echo "error: local tag '$TAG' already exists at $existing; refusing to overwrite it" >&2
+    echo "       if the tag push failed, verify the commit and retry with: git push --no-follow-tags origin refs/tags/$TAG" >&2
+    exit 1
+fi
+
+# Push the exact commit to origin main. Explicit refspec, no follow-tags, no force.
+echo "-> pushing ${commit:0:12} to origin main"
+git push --no-follow-tags origin "${commit}:refs/heads/main"
+
+# Create the annotated release tag at that same commit.
+echo "-> tagging ${commit:0:12} as $TAG"
+git tag -a "$TAG" "$commit" -m "munch-v${VERSION} release"
+
+# Push only the full tag ref, separately. Leave the local tag intact on failure.
+echo "-> pushing tag $TAG"
+git push --no-follow-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+
+echo "pushed $TAG for ${commit:0:12}; check the tag's munch workflow for publication"
