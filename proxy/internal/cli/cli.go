@@ -89,6 +89,8 @@ func (a *App) Run(args []string) int {
 		err = a.cmdRestart(rest)
 	case "install":
 		err = a.cmdInstall(rest)
+	case "update":
+		err = a.cmdUpdate(rest)
 	case "uninstall":
 		err = a.cmdUninstall(rest)
 	case "status":
@@ -132,10 +134,10 @@ Commands:
   start                Start the background proxy daemon
   stop                 Stop the background proxy daemon
   restart              Restart the background proxy daemon
-  install              One-step setup: save your API key, install and start the background
-                       service, verify it, offer omp-tm for Oh My Pi, and wire your shell profile
-                       (--yes accepts every default, --no-shell leaves shell profiles alone)
-  uninstall            Remove the background service, stop the proxy, and remove the shell profile block
+  install              Set up the background service, and offer to configure OMP, the shell,
+                       and Codex with ChatGPT sign-in (--yes, --no-shell, --no-codex)
+  update               Replace this binary with the latest stable Munch release
+  uninstall            Stop and remove the service and remove Munch-managed shell and Codex setup
   status               Show proxy runtime, queue, and service status
   pause                Pause reporting (proxied AI traffic continues uninterrupted)
   resume               Resume reporting
@@ -432,7 +434,8 @@ var installHealthTimeout = 10 * time.Second
 var errNoKeyAvailable = errors.New("no API key: run `munch login` (or set TOKENMUNCHERS_KEY), then run `munch install` again")
 
 // cmdInstall sets munch up end to end: API key, background service, health
-// check, the omp-tm choice for Oh My Pi, and the shell profile hook.
+// check, the omp-tm choice for Oh My Pi, the shell profile hook, and Codex
+// signed in with ChatGPT.
 func (a *App) cmdInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
@@ -440,6 +443,7 @@ func (a *App) cmdInstall(args []string) error {
 	listen := fs.String("listen", "", "override listen address")
 	yes := fs.Bool("yes", false, "don't prompt; accept the recommended answer to every question")
 	noShell := fs.Bool("no-shell", false, "don't modify shell profiles")
+	noCodex := fs.Bool("no-codex", false, "don't inspect or modify Codex settings")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -473,7 +477,11 @@ func (a *App) cmdInstall(args []string) error {
 	if err != nil {
 		return err
 	}
-	a.printInstallSummary(cfg, svc, sh, flags)
+	cx, err := a.installCodex(p, paths, cfg, *noCodex)
+	if err != nil {
+		return err
+	}
+	a.printInstallSummary(cfg, svc, sh, cx, flags)
 	return nil
 }
 
@@ -831,7 +839,7 @@ func shellNote() string {
 
 // printInstallSummary closes the install output with what is active and what
 // is left for the user to do.
-func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shellOutcome, flags []envFlag) {
+func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shellOutcome, cx codexOutcome, flags []envFlag) {
 	fmt.Fprintf(a.Stdout, "\nmunch is running on http://%s (%s).\n", cfg.ListenAddr, svc.backend)
 	if !svc.autoStart {
 		fmt.Fprintln(a.Stdout, "It does not start by itself after a reboot or logout; run `munch start` then.")
@@ -864,6 +872,12 @@ func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shel
 			fmt.Fprintln(a.Stdout, "OMP is proxied, but that line also defines an `omp` function that leaves out OLLAMA_HOST: OMP would drop the private route, so it talks to local Ollama directly.")
 		}
 	}
+	switch {
+	case cx.routed != "":
+		fmt.Fprintf(a.Stdout, "Codex signed in with ChatGPT is routed through it too (Munch provider in %s); start a new Codex process to pick that up.\n", cx.routed)
+	case cx.unrouted:
+		fmt.Fprintln(a.Stdout, "Codex signed in with ChatGPT is not routed through it; run `munch install` again to set that up, or follow the manual Codex steps in the proxy README.")
+	}
 	if sh.wired != "" {
 		fmt.Fprintln(a.Stdout, "Open a new terminal to pick this up: shells and apps that are already running keep their old environment.")
 	} else {
@@ -891,10 +905,11 @@ func (a *App) cmdUninstall(args []string) error {
 	}
 	fmt.Fprintln(a.Stdout, "Uninstalled munch service")
 	hookErr := a.removeShellHooks()
+	codexErr := a.removeCodexRoute()
 	if cfg.OMPViaPlugin {
 		fmt.Fprintf(a.Stdout, "The %s plugin was left installed and keeps reporting OMP usage; remove it with `omp plugin uninstall %s` if you don't want that.\n", omp.PluginName, omp.PluginName)
 	}
-	return hookErr
+	return errors.Join(hookErr, codexErr)
 }
 
 // removeShellHooks deletes the munch block from every profile install may

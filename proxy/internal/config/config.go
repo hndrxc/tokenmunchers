@@ -17,11 +17,13 @@ import (
 )
 
 // Version is the munch release version, defaulting to the development version
-// 0.1.0. Release builds override it at link time via
-//   -X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=<version>
+// "dev". Release builds override it at link time via
+//
+//	-X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=<version>
+//
 // where the linked version is the full (e.g. "1.4.1") with no "munch-v"
 // prefix.
-var Version = "0.1.0"
+var Version = "dev"
 
 // ClientVersion is the ingest client identity reported to the upstream
 // service; it always carries the "tmproxy/" prefix.

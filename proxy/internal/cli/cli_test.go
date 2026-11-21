@@ -674,7 +674,7 @@ func newInstallFixture(t *testing.T) *installFixture {
 	t.Setenv("TMPROXY_LISTEN", f.listen)
 	for _, name := range []string{
 		"TOKENMUNCHERS_KEY", "TOKENMUNCHERS_API_KEY", "TOKENMUNCHERS_URL",
-		"ZDOTDIR", "XDG_CONFIG_HOME",
+		"ZDOTDIR", "XDG_CONFIG_HOME", "CODEX_HOME",
 		"PI_CONFIG_DIR", "PI_PROFILE", "OMP_PROFILE", "PI_CODING_AGENT_DIR",
 	} {
 		t.Setenv(name, "")

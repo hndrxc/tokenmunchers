@@ -57,7 +57,7 @@ If OMP is installed, `munch install` offers to set up the OMP plugin for you, so
 
 #### Option A: munch
 
-`munch` runs in the background. Your AI tools send requests through it; it reads the token counts from the replies and sends only usage metadata to tokenmunchers. It supports Anthropic, OpenAI/ChatGPT/Codex, Gemini, xAI/Grok, OpenRouter and Ollama. The shell setup routes most tools automatically; Codex signed in with ChatGPT needs [one manual step](proxy/README.md#4-codex-chatgpt-sign-in).
+`munch` runs in the background. Your AI tools send requests through it; it reads the token counts from the replies and sends only usage metadata to tokenmunchers. It supports Anthropic, OpenAI/ChatGPT/Codex, Gemini, xAI/Grok, OpenRouter and Ollama. The shell setup routes most tools automatically; the installer offers separate setup for Codex signed in with ChatGPT.
 
 On Linux or macOS, download and run the installer. It installs the latest stable Munch binary in `~/.local/bin` and verifies its SHA-256 checksum. No Go or `sudo` required.
 
@@ -67,6 +67,8 @@ curl -fsSL https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-m
 ```
 
 See [install options](proxy/README.md#install-a-release) or [build from source](proxy/README.md#build-from-source).
+
+To upgrade an installed release, run `munch update`, then `munch restart` if the background service is running. For older versions without `munch update`, re-run the download script above.
 
 Make sure `~/.local/bin` is on your `PATH`, then run the one-step setup:
 
@@ -79,12 +81,11 @@ It goes through these steps and prints a line for each:
 1. **API key.** Uses a key you've already saved, then `TOKENMUNCHERS_KEY` or `TOKENMUNCHERS_API_KEY` from your environment. If there's neither, it asks you to paste your `tm_` key.
 2. **Background service.** Installs and starts it (`systemd --user` on Linux, `launchd` on macOS, or a plain background process if neither is available), then waits for a health check.
 3. **OMP.** Only if `omp` is installed: asks whether to report OMP with the `omp-tokenmunchers` plugin instead of the proxy. Say yes (the default) so OMP calls aren't counted twice. It installs the plugin and gives it the same key.
-4. **Shell profile.** Adds a clearly marked block to `~/.bashrc`, `~/.zshrc` or fish's `conf.d/munch.fish` so new terminals route your tools through `munch` (Codex with ChatGPT sign-in needs the manual step below).
-5. **Summary.** Shows what it did.
+4. **Shell profile.** Adds a clearly marked block to `~/.bashrc`, `~/.zshrc` or fish's `conf.d/munch.fish` so new terminals route your tools through `munch`.
+5. **Codex.** If the Codex CLI is installed and signed in with ChatGPT, offers to add a Munch model provider. Restart Codex afterwards.
+6. **Summary.** Shows what it did.
 
-`munch install --yes` skips the questions (it needs a saved key or `TOKENMUNCHERS_KEY`/`TOKENMUNCHERS_API_KEY` already set). `munch install --no-shell` leaves your shell profile alone and prints the line to add yourself.
-
-**Codex with ChatGPT sign-in.** The shell block routes Claude Code, OpenAI-compatible clients, Gemini, Grok and the others automatically. Codex signed in with ChatGPT reads its backend from its own config (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) and rejects plain-HTTP `chatgpt_base_url`, so it needs one manual step: run `munch routes --show-local-urls` privately, copy the `chatgpt` route URL, and add a `munch_chatgpt` custom provider (name `Munch`) whose `base_url` is that URL plus `/backend-api/codex`. Remove any old plain-HTTP `chatgpt_base_url`, then restart Codex. Full instructions are in the [munch README](proxy/README.md#4-codex-chatgpt-sign-in). Only calls that actually go through the proxy after this are recorded.
+`munch install --yes` skips the questions (it needs a saved key or `TOKENMUNCHERS_KEY`/`TOKENMUNCHERS_API_KEY` already set). `--no-shell` leaves the shell profile alone; `--no-codex` leaves your Codex config alone. See [manual Codex setup](proxy/README.md#4-codex-chatgpt-sign-in) if the installer skips it.
 
 **Open a new terminal** so your shell picks up the change; tools that were already running keep their old settings. Then check it works:
 
@@ -92,7 +93,7 @@ It goes through these steps and prints a line for each:
 munch status
 ```
 
-Make a request in any tool whose traffic is routed through `munch` (Codex with ChatGPT sign-in: finish the manual step first). It should appear in the dashboard's **Activity** feed within a few seconds, and you'll show under **Live now**.
+Make a request in a tool routed through `munch`. It should appear in the dashboard's **Activity** feed within a few seconds, and you'll show under **Live now**.
 
 #### Option B: OMP plugin only
 
@@ -257,7 +258,7 @@ Make sure `~/.local/bin` is on your `PATH` and open a new terminal. If the file 
 - Run `munch status` and check that it's running and not paused, and look at the last error.
 - Open a new terminal after `munch install`. Terminals and tools that were already running keep their old settings; restart them too.
 - Or run a single command through the proxy to test: `munch exec -- <command>`.
-- If you use Codex signed in with ChatGPT, check that you completed the [manual `munch_chatgpt` provider step](proxy/README.md#4-codex-chatgpt-sign-in) (and removed any old plain-HTTP `chatgpt_base_url`) — the shell setup doesn't route it. Codex rejecting the URL with "workspace backend must use an HTTPS origin" means that old setting is still present. Restart Codex after editing.
+- If you use Codex signed in with ChatGPT, run `munch install` and accept the Codex setup, then restart Codex. If the installer skips it, see the [manual provider setup](proxy/README.md#4-codex-chatgpt-sign-in). An old plain-HTTP `chatgpt_base_url` can cause an HTTPS-origin error.
 
 **OMP calls are counted twice**
 Both the OMP plugin and `munch` are reporting them. Run `munch install` again and accept the omp-tm question, so OMP is reported by its plugin only. Or, to report OMP through `munch` instead, run `omp plugin disable omp-tokenmunchers`.

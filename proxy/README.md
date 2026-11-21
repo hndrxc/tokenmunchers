@@ -2,14 +2,14 @@
 
 `munch` is the local proxy program of [tokenmunchers](../README.md). It sends usage events to the same dashboard as the plugins, so its calls appear in Activity and Live now.
 
-`munch` is a lightweight, zero-dependency Go background proxy that captures token usage across common AI inference providers and streams metadata-only usage events directly to TokenMunchers via the existing `POST /functions/v1/ingest` API flow.
+`munch` is a lightweight Go background proxy that captures token usage across common AI inference providers and streams metadata-only usage events directly to TokenMunchers via the existing `POST /functions/v1/ingest` API flow.
 
 - **No TLS interception or root CA:** binds to loopback and requires a private local URL for inference requests.
 - **Streaming passthrough:** SSE and NDJSON flush chunk by chunk. If the upstream body fails mid-stream, the client sees an interrupted response rather than a clean EOF. Usage extraction is bounded and may skip accounting on oversized input.
 - **HTTP/SSE only:** WebSocket upgrades are rejected (HTTP 426), so transports or client features that need WebSockets do not work through the proxy.
 - **Uses the existing TokenMunchers API flow:** authenticates with your normal `tm_` API key, posts strictly allowlisted `usage` events to `/functions/v1/ingest`, appears live on the dashboard and **Live now** presence automatically, and retries offline via an on-disk JSONL queue.
 - **Metadata-only reporting:** inference traffic goes to the configured provider; TokenMunchers receives usage metrics and identifiers, not prompts, completions, tool output, or provider credentials.
-- **Linux-first, easily portable:** pure Go standard library (`CGO_ENABLED=0`), XDG paths + `systemd --user` service on Linux, `launchd` LaunchAgent on macOS, and a PID-file daemon fallback elsewhere.
+- **Linux-first, easily portable:** standalone Go binary (`CGO_ENABLED=0`), XDG paths + `systemd --user` service on Linux, `launchd` LaunchAgent on macOS, and a PID-file daemon fallback elsewhere.
 
 ---
 
@@ -26,9 +26,13 @@ curl -fsSL https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-m
 
 The script finds the latest stable `munch-v*` release, verifies the archive against `SHA256SUMS`, and installs `munch` in `~/.local/bin`. It requires `curl`, `python3`, `tar`, and either `sha256sum` or `shasum`, but not Go or `sudo`. To use a different directory, run `MUNCH_INSTALL_DIR=/path/to/bin sh install-munch.sh`.
 
-Put that directory on your `PATH`, then run `munch --version` and `munch install`. Re-running the script updates the binary without editing your configuration or restarting the daemon. If the daemon is already running, restart it with `munch restart` to load the new binary.
+Put that directory on your `PATH`, then run `munch --version` and `munch install`.
 
 For a manual install, download the archive for your OS (`linux` or `darwin`) and architecture (`amd64` or `arm64`) and `SHA256SUMS` from [GitHub Releases](https://github.com/hndrxc/tokenmunchers/releases). Check the archive against the matching entry before extracting `munch` into a directory on your `PATH`.
+
+### Update an installed release
+
+Run `munch update` to check for a newer stable `munch-v*` release. It verifies the matching archive against `SHA256SUMS` before replacing the running command's binary in place. It leaves your configuration and background daemon untouched. Run `munch restart` if the daemon is already running. If your old release has no `update` command, re-run the installer script above.
 
 ### Build from source
 
@@ -60,7 +64,7 @@ The helper pushes the release commit to `origin/main` first, then creates and pu
 
 The tag push starts the `munch` workflow. It tests `proxy/`, builds Linux and macOS archives for `amd64` and `arm64`, and publishes them with `SHA256SUMS`. If the tag is on GitHub but no tag run appears in Actions, start the same workflow with `gh workflow run munch.yml --ref munch-v0.1.1`. If only the tag push failed, retry it with `git push --no-follow-tags origin refs/tags/munch-v0.1.1`.
 
-`munch --version` and the usage client's version both use the numeric version from the tag. Untagged source builds default to `0.1.0`. To set a version in a manual build from `proxy/`:
+`munch --version` and the usage client's version both use the numeric version from the tag. Untagged source builds default to `dev` and are not eligible for `munch update`. To set a version in a manual build from `proxy/`:
 
 ```bash
 go build -ldflags '-X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=0.1.1' ./cmd/munch
@@ -94,15 +98,17 @@ munch install
 1. **API key.** Uses the key saved in `config.json` by `munch login`. If there is none, it takes `TOKENMUNCHERS_KEY` (or `TOKENMUNCHERS_API_KEY`) from your environment and saves it to `config.json`, because the background service does not see your shell's environment. Failing that, it asks you to paste one; the prompt does not hide terminal input. Keys are stored with mode `0600` in `~/.config/tmproxy/config.json` and are never printed.
 2. **Background service.** Installs and starts the OS service (`systemd --user` on Linux, `launchd` on macOS), then waits for an authenticated health check. A daemon that is already running is stopped first, so a new binary, config, and key take effect. Without a service manager it starts a plain background process and tells you it won't restart after a reboot. If the proxy doesn't answer within 10 seconds, `install` fails and points you to `munch status` (and `journalctl --user -u tmproxy` on systemd).
 3. **omp-tm.** If `omp` is on your `PATH`, it asks whether to report Oh My Pi usage with the `omp-tokenmunchers` plugin instead of the proxy (the default answer is yes). See [Oh My Pi (omp-tm)](#oh-my-pi-omp-tm). A problem with `omp` or the plugin is only a warning: OMP routing stays as it was, and you can run `munch install` again.
-4. **Shell profile.** Asks before changing your profile (`Add munch to <profile> so new shells route AI tools through the proxy?`, or `Update the munch block in <profile>?` if the block exists). On yes, adds a marked block (`# >>> munch >>>` … `# <<< munch <<<`) so new shells run `munch env --check` and route Claude Code, the OpenAI SDKs, Gemini, and other tools through the proxy. Codex signed in with ChatGPT is the exception: it reads its ChatGPT backend URL from its own config, not from these exported variables, so it needs the manual step in [Codex (ChatGPT sign-in)](#4-codex-chatgpt-sign-in). The profile is picked from `$SHELL`: `~/.bashrc` (`~/.bash_profile` on macOS), `.zshrc` under `$ZDOTDIR` or your home directory, or `~/.config/fish/conf.d/munch.fish`. Other shells are not edited; the summary prints the line to add yourself. Everything outside the block stays untouched, and a hand-written `munch env` line already in the profile is left alone.
-5. **Summary.** Prints where munch is running, whether it starts again after a reboot, whether new shells are wired, how OMP is handled, and a reminder to open a new terminal.
+4. **Shell profile.** Asks before adding or refreshing a marked block (`# >>> munch >>>` … `# <<< munch <<<`) that runs `munch env --check` in new shells. The profile is picked from `$SHELL`: `~/.bashrc` (`~/.bash_profile` on macOS), `.zshrc` under `$ZDOTDIR` or your home directory, or `~/.config/fish/conf.d/munch.fish`. Other shells are not edited; the summary prints the line to add yourself. Unmanaged lines stay untouched.
+5. **Codex.** If `codex` is on your `PATH` and signed in with ChatGPT, offers to configure its user-level Munch provider. The provider points at the private loopback route; another explicitly selected provider or a custom backend is left alone. Start a new Codex process to use it. See [manual setup](#4-codex-chatgpt-sign-in) if the installer skips it.
+6. **Summary.** Prints where Munch is running, whether it starts after a reboot, and what to do next.
 
-Open a new terminal afterwards: shells and apps that are already running keep their old environment. Re-running `munch install` is safe; it restarts the daemon and refreshes the profile block. `munch uninstall` removes the service and the profile block.
+Open a new terminal afterwards: running processes keep their old settings. Re-running `munch install` restarts the daemon and can refresh its managed settings. `munch uninstall` removes the service, the shell block, and the unmodified Codex settings managed by Munch.
 
 | Flag | Effect |
 | --- | --- |
 | `--yes` | Don't prompt: take the recommended answer to every question, including omp-tm. With no API key available it fails instead of asking for one. |
 | `--no-shell` | Don't touch shell profiles. The summary prints the line to add yourself. |
+| `--no-codex` | Don't inspect or modify Codex settings. |
 | `--config-dir`, `--state-dir`, `--listen` | Use non-default locations. The profile block runs `munch env --check` without flags, so with any of these `install` leaves your profile alone and prints the `eval` line, with the same flags, for you to add. |
 
 ### Manual setup
@@ -161,6 +167,8 @@ munch exec -- codex
 
 #### 4. Codex (ChatGPT sign-in)
 
+`munch install` offers to set this up for the CLI. Use these manual steps if it cannot configure your setup.
+
 Codex signed in with ChatGPT does not read the proxy environment variables, and Codex 0.171+ rejects a plain-HTTP `chatgpt_base_url` ("workspace backend must use an HTTPS origin without credentials"). Instead, add a custom model provider in the user-level `config.toml` (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`; Codex ignores project-scoped `.codex/config.toml` for this). If you set `chatgpt_base_url` to a plain-HTTP `munch` URL earlier, remove that line: leave `chatgpt_base_url` unset so Codex keeps using its default backend for account discovery.
 
 ```bash
@@ -193,14 +201,14 @@ Then restart Codex (start a new `codex` process) and make a request. `requires_o
 | --- | --- | --- | --- |
 | `anthropic` | `https://api.anthropic.com` | Anthropic Messages (JSON + SSE) | `ANTHROPIC_BASE_URL` |
 | `openai` | `https://api.openai.com` | OpenAI Chat + Responses (JSON + SSE) | `OPENAI_BASE_URL` (includes `/v1`) |
-| `chatgpt` | `https://chatgpt.com` | ChatGPT / Codex Responses (SSE) | None emitted — add Codex's `munch_chatgpt` provider manually |
+| `chatgpt` | `https://chatgpt.com` | ChatGPT / Codex Responses (SSE) | None emitted — `munch install` offers to configure the Codex provider |
 | `gemini` | `https://generativelanguage.googleapis.com` | Gemini GenerateContent (JSON + SSE) | `GEMINI_API_BASE_URL`, `GOOGLE_GEMINI_BASE_URL` |
 | `xai` | `https://api.x.ai` | OpenAI-compatible + `cost_in_usd_ticks` | `XAI_BASE_URL` (includes `/v1`) |
 | `grok` | `https://api.x.ai` | OpenAI-compatible + `cost_in_usd_ticks` | `GROK_MODELS_BASE_URL` |
 | `openrouter` | `https://openrouter.ai` | OpenAI-compatible + `usage.cost` | `OPENROUTER_BASE_URL` (includes `/api/v1`) |
 | `ollama` | `http://127.0.0.1:11434` | Ollama native NDJSON + OpenAI-compatible | `OLLAMA_HOST` (not given to `omp`; see below) |
 
-> The `chatgpt` route is used only by Codex signed in with ChatGPT, and `munch env` never sets it; configure it manually as described in [Codex (ChatGPT sign-in)](#4-codex-chatgpt-sign-in).
+> The `chatgpt` route is used only by Codex signed in with ChatGPT. `munch env` never sets it; use `munch install` or [configure it manually](#4-codex-chatgpt-sign-in).
 > **Avoiding double counting:** OMP has its own plugin (omp-tm), so `munch install` keeps OMP out of the proxy by default and the same call isn't reported twice. See below.
 
 ### Oh My Pi (omp-tm)
@@ -231,8 +239,9 @@ Because the wrapper removes these variables, configure custom OMP endpoints (for
 | `munch login [key]` | Validate and store your `tm_` API key (`--url` sets a self-hosted ingest URL, `--listen` the proxy address) |
 | `munch run` | Run in the foreground (`--listen`, `--verbose`, `--config-dir`, `--state-dir`) |
 | `munch start` / `stop` / `restart` | Start, stop, or restart the background daemon |
-| `munch install [--yes] [--no-shell]` | One-shot setup: API key, background service (`systemd --user` on Linux, `launchd` on macOS), health check, omp-tm offer when `omp` is on `PATH`, and a shell profile block (see [Quick Start](#quick-start)) |
-| `munch uninstall` | Remove the OS auto-start service, stop the proxy, and remove the shell profile block from the bash, zsh and fish profiles it may have written. It keeps `~/.config/tmproxy` and leaves the `omp-tokenmunchers` plugin installed |
+| `munch install [--yes] [--no-shell] [--no-codex]` | Set up the proxy and offer to configure OMP, the shell profile, and Codex (see [Quick Start](#quick-start)) |
+| `munch update` | Verify and install a newer stable Munch binary in place; restart a running daemon separately |
+| `munch uninstall` | Stop and remove the service and remove managed shell and Codex setup. Keeps `~/.config/tmproxy` and the `omp-tokenmunchers` plugin |
 | `munch status [--json]` | Show runtime status, uptime, queue depth, delivered counts, and last error |
 | `munch pause` / `resume` | Stop/resume recording usage (AI traffic keeps proxying uninterrupted) |
 | `munch flush` | Force-flush queued usage events immediately |
