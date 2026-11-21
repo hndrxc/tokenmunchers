@@ -57,43 +57,26 @@ If OMP is installed, `munch install` offers to set up the OMP plugin for you, so
 
 #### Option A: munch
 
-`munch` runs in the background. Your AI tools send requests through it; it reads the token counts from the replies and sends only usage metadata to tokenmunchers. It supports Anthropic, OpenAI/ChatGPT/Codex, Gemini, xAI/Grok, OpenRouter and Ollama. The shell setup routes most tools automatically; the installer offers separate setup for Codex signed in with ChatGPT.
+`munch` sends usage metadata from routed AI tools to the dashboard. See [what Munch changes](proxy/README.md#what-munch-changes) for the files, settings, and services it touches.
 
-On Linux or macOS, download and run the installer. It installs the latest stable Munch binary in `~/.local/bin` and verifies its SHA-256 checksum. No Go or `sudo` required.
+1. **Install the binary** on Linux or macOS. The installer checks the release archive's SHA-256 checksum; no Go or `sudo` required.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.sh -o install-munch.sh &&
-  sh install-munch.sh
-```
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.sh -o install-munch.sh &&
+     sh install-munch.sh
+   ```
 
-See [install options](proxy/README.md#install-a-release) or [build from source](proxy/README.md#build-from-source).
+   Make sure `~/.local/bin` is on your `PATH`. See [other install options](proxy/README.md#install-a-release).
+2. **Run setup** with the `tm_` key from [step 2](#2-create-an-api-key).
 
-To upgrade an installed release, run `munch update`, then `munch restart` if the background service is running. For older versions without `munch update`, re-run the download script above.
+   ```bash
+   munch install
+   ```
 
-Make sure `~/.local/bin` is on your `PATH`, then run the one-step setup:
+   Munch starts the background service and offers to set up your shell, OMP, and Codex CLI with ChatGPT sign-in as applicable. See [manual setup and flags](proxy/README.md#quick-start) if a tool is skipped.
+3. **Verify.** Open a new terminal, restart any already-running AI tools, and run `munch status`. Make a request in a routed tool and look for it in the dashboard's **Activity** feed.
 
-```bash
-munch install
-```
-
-It goes through these steps and prints a line for each:
-
-1. **API key.** Uses a key you've already saved, then `TOKENMUNCHERS_KEY` or `TOKENMUNCHERS_API_KEY` from your environment. If there's neither, it asks you to paste your `tm_` key.
-2. **Background service.** Installs and starts it (`systemd --user` on Linux, `launchd` on macOS, or a plain background process if neither is available), then waits for a health check.
-3. **OMP.** Only if `omp` is installed: asks whether to report OMP with the `omp-tokenmunchers` plugin instead of the proxy. Say yes (the default) so OMP calls aren't counted twice. It installs the plugin and gives it the same key.
-4. **Shell profile.** Adds a clearly marked block to `~/.bashrc`, `~/.zshrc` or fish's `conf.d/munch.fish` so new terminals route your tools through `munch`.
-5. **Codex.** If the Codex CLI is installed and signed in with ChatGPT, offers to add a Munch model provider. Restart Codex afterwards.
-6. **Summary.** Shows what it did.
-
-`munch install --yes` skips the questions (it needs a saved key or `TOKENMUNCHERS_KEY`/`TOKENMUNCHERS_API_KEY` already set). `--no-shell` leaves the shell profile alone; `--no-codex` leaves your Codex config alone. See [manual Codex setup](proxy/README.md#4-codex-chatgpt-sign-in) if the installer skips it.
-
-**Open a new terminal** so your shell picks up the change; tools that were already running keep their old settings. Then check it works:
-
-```bash
-munch status
-```
-
-Make a request in a tool routed through `munch`. It should appear in the dashboard's **Activity** feed within a few seconds, and you'll show under **Live now**.
+To upgrade, run `munch update`, then `munch restart` if the background service is running. Older versions without `munch update`: re-run the installer above.
 
 #### Option B: OMP plugin only
 
@@ -201,9 +184,10 @@ Type these in a terminal:
 | `munch stats` | Shows your recorded usage on this machine (`--period today`, `week` or `all`) |
 | `munch exec -- <command>` | Runs one command through the proxy, for example `munch exec -- claude` |
 | `munch env` | Prints the shell settings that route tools through the proxy |
-| `munch uninstall` | Removes the background service and the shell profile block. It leaves the OMP plugin installed |
+| `munch update` | Installs the latest stable release in place; run `munch restart` afterwards if the service is running |
+| `munch uninstall` | Stops and removes the background service, and removes munch's shell profile block and the Codex settings it added (settings you wrote or edited by hand are left for you). It keeps the `munch` binary, your saved key and settings, and the OMP plugin. See [What munch changes](proxy/README.md#what-munch-changes) |
 
-The full command list, routes and settings are in the [munch README](proxy/README.md). Its settings stay in `~/.config/tmproxy/` and its service is called `tmproxy.service`; those names are intentional.
+The full command list, routes and settings are in the [munch README](proxy/README.md). Its settings stay in a `tmproxy` folder (`~/.config/tmproxy/` on Linux, `~/Library/Application Support/tmproxy/` on macOS) and its service is called `tmproxy.service` (systemd) or `com.tokenmunchers.tmproxy` (launchd); those names are intentional.
 
 ---
 
@@ -252,7 +236,7 @@ Backfill waits until queued calls have been delivered, so those calls don't get 
 ### munch
 
 **`munch: command not found`**
-Make sure `~/.local/bin` is on your `PATH` and open a new terminal. If the file isn't there, build it again with `cd tokenmunchers/proxy && go build -o ~/.local/bin/munch ./cmd/munch`.
+Make sure `~/.local/bin` (or your `MUNCH_INSTALL_DIR`) is on your `PATH` and open a new terminal. If the file isn't there, run the [installer](#option-a-munch) again.
 
 **My calls don't show up with munch**
 - Run `munch status` and check that it's running and not paused, and look at the last error.
