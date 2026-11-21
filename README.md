@@ -9,7 +9,7 @@ Small programs on your computer report the token counts of your AI model calls, 
 | Part | What it is | Docs |
 | --- | --- | --- |
 | **Site** | The dashboard at [tokenmunchers.taiisshort.com](https://tokenmunchers.taiisshort.com): leaderboard, Live now, activity feed, profiles, and Settings → API keys. | [dashboard/](dashboard/README.md) |
-| **Service** | Supabase Edge Functions (`ingest`, `history`, `contributions`) that check every field and API key before storing anything. `contributions` holds Claude Code and Codex usage uploaded earlier. | [supabase/](supabase/README.md) |
+| **Service** | Supabase Edge Functions (`ingest`, `history`, `contributions`) that check every field and API key before storing anything. `contributions` accepts uploads of Claude Code and Codex usage collected earlier. | [supabase/](supabase/README.md) |
 | **Database** | Supabase Postgres: per-call events (kept about a week), daily totals (kept forever), imported history, and scheduled rollups. | [supabase/](supabase/README.md) |
 | **Plugins** | `omp-tokenmunchers` for Oh My Pi. | [plugin/](plugin/README.md) |
 | **Program** | `munch`: a small local proxy that records token usage for Claude Code, Codex, Gemini, Grok, OpenRouter, Ollama and other tools. | [proxy/](proxy/README.md) |
@@ -18,7 +18,7 @@ Pick one or more ways to report your usage. They all feed the same leaderboard.
 
 - **Real time.** A finished model call shows up on the dashboard in about a second.
 - **Metadata only.** Token counts, model names and timestamps. Never prompts, responses, code or file paths.
-- **Complete history.** The OMP plugin can import usage from before you installed it, and recover calls that were missed. (`munch` records from the moment it is installed; it doesn't import history.)
+- **Complete history.** The OMP plugin can import usage from before you installed it, and recover calls that were missed. (`munch` records from the moment your tools are routed through it; it doesn't import history.)
 - **Private by default.** Sign-in is invite-only, and every member can pause reporting at any time.
 
 ---
@@ -57,7 +57,7 @@ If OMP is installed, `munch install` offers to set up the OMP plugin for you, so
 
 #### Option A: munch
 
-`munch` is a small program that runs in the background on your computer. Your AI tools send their requests through it, it reads the token counts from the replies, and it sends only those counts to tokenmunchers. It is built mainly for Linux and macOS, and supports Anthropic, OpenAI/ChatGPT/Codex, Gemini, xAI/Grok, OpenRouter and Ollama. There are no prebuilt downloads yet, so you build it once.
+`munch` is a small program that runs in the background on your computer. Your AI tools send their requests through it, it reads the token counts from the replies, and it sends only those counts to tokenmunchers. It is built mainly for Linux and macOS, and supports Anthropic, OpenAI/ChatGPT/Codex, Gemini, xAI/Grok, OpenRouter and Ollama. There are no prebuilt downloads yet, so you build it once. The shell setup routes most of these automatically; Codex signed in with ChatGPT needs one manual step ([see the munch README](proxy/README.md#4-codex-chatgpt-sign-in)).
 
 **You need:** [Go 1.24 or newer](https://go.dev/dl/) (`go version` shows what you have).
 
@@ -78,10 +78,12 @@ It goes through these steps and prints a line for each:
 1. **API key.** Uses a key you've already saved, then `TOKENMUNCHERS_KEY` or `TOKENMUNCHERS_API_KEY` from your environment. If there's neither, it asks you to paste your `tm_` key.
 2. **Background service.** Installs and starts it (`systemd --user` on Linux, `launchd` on macOS, or a plain background process if neither is available), then waits for a health check.
 3. **OMP.** Only if `omp` is installed: asks whether to report OMP with the `omp-tokenmunchers` plugin instead of the proxy. Say yes (the default) so OMP calls aren't counted twice. It installs the plugin and gives it the same key.
-4. **Shell profile.** Adds a clearly marked block to `~/.bashrc`, `~/.zshrc` or fish's `conf.d/munch.fish` so new terminals route your tools through `munch`.
+4. **Shell profile.** Adds a clearly marked block to `~/.bashrc`, `~/.zshrc` or fish's `conf.d/munch.fish` so new terminals route your tools through `munch` (Codex with ChatGPT sign-in needs the manual step below).
 5. **Summary.** Shows what it did.
 
-`munch install --yes` skips the questions (it needs a saved key or `TOKENMUNCHERS_KEY` already set). `munch install --no-shell` leaves your shell profile alone and prints the line to add yourself.
+`munch install --yes` skips the questions (it needs a saved key or `TOKENMUNCHERS_KEY`/`TOKENMUNCHERS_API_KEY` already set). `munch install --no-shell` leaves your shell profile alone and prints the line to add yourself.
+
+**Codex with ChatGPT sign-in.** The shell block routes Claude Code, OpenAI-compatible clients, Gemini, Grok and the others automatically. Codex signed in with ChatGPT reads its backend URL from its own config instead, so it needs one manual step: run `munch routes --show-local-urls`, copy the `chatgpt` route URL, and set `chatgpt_base_url` to it plus `/backend-api/` in `~/.codex/config.toml`, then restart Codex. Full instructions are in the [munch README](proxy/README.md#4-codex-chatgpt-sign-in). Only calls that actually go through the proxy after this are recorded.
 
 **Open a new terminal** so your shell picks up the change; tools that were already running keep their old settings. Then check it works:
 
@@ -89,7 +91,7 @@ It goes through these steps and prints a line for each:
 munch status
 ```
 
-Make a request in Claude Code, Codex or another tool. It should appear in the dashboard's **Activity** feed within a few seconds, and you'll show under **Live now**.
+Make a request in any tool whose traffic is routed through `munch` (Codex with ChatGPT sign-in: finish the manual step first). It should appear in the dashboard's **Activity** feed within a few seconds, and you'll show under **Live now**.
 
 #### Option B: OMP plugin only
 
@@ -162,7 +164,7 @@ You'll see a preview (number of calls, total tokens, date range, and projects) b
 
 Only daily totals per model are uploaded. Running it again replaces your previous upload, so it's safe to repeat.
 
-Claude Code and Codex history import isn't available at the moment. `munch` records those tools from the moment it is installed.
+Claude Code and Codex history import isn't available at the moment. `munch` records those tools from the moment they are routed through it.
 
 **You're done.**
 
@@ -254,6 +256,7 @@ Make sure `~/.local/bin` is on your `PATH` and open a new terminal. If the file 
 - Run `munch status` and check that it's running and not paused, and look at the last error.
 - Open a new terminal after `munch install`. Terminals and tools that were already running keep their old settings; restart them too.
 - Or run a single command through the proxy to test: `munch exec -- <command>`.
+- If you use Codex signed in with ChatGPT, check that you completed the [manual `chatgpt_base_url` step](proxy/README.md#4-codex-chatgpt-sign-in) — the shell setup doesn't route it.
 
 **OMP calls are counted twice**
 Both the OMP plugin and `munch` are reporting them. Run `munch install` again and accept the omp-tm question, so OMP is reported by its plugin only. Or, to report OMP through `munch` instead, run `omp plugin disable omp-tokenmunchers`.
@@ -263,6 +266,9 @@ Open a new terminal after running `munch install`. The `omp` in that terminal ru
 
 **Upgrading from the old `tmproxy` name**
 Delete the `eval "$(tmproxy env --check)"` line you added to your shell profile, and delete the old `tmproxy` binary. Then run `munch install`. It reuses your saved key and settings.
+
+**Upgrading from the retired Claude Code and Codex plugins**
+If you installed the old collector plugins, uninstall them so they stop uploading: `claude plugin uninstall tokenmunchers@tokenmunchers` and `codex plugin remove tokenmunchers-codex@tokenmunchers`. Usage they uploaded before stays on the leaderboard.
 
 ---
 
@@ -284,7 +290,7 @@ Delete the `eval "$(tmproxy env --check)"` line you added to your shell profile,
 2. The **service**'s `ingest` Edge Function checks the request's fields and API key and stores the call. Each call has an ID, so a repeated send is stored only once.
 3. The **database** adds calls up into daily totals every 10 minutes (scheduled Postgres jobs). Per-call data is kept for about a week; daily totals are kept forever.
 4. The **site** subscribes to new calls over Supabase Realtime, so it updates without reloading.
-5. `/munch backfill` sends daily totals to the `history` function. The `contributions` function holds Claude Code and Codex usage uploaded earlier; the daily views still count it alongside live and OMP usage.
+5. `/munch backfill` sends daily totals to the `history` function. The `contributions` function accepts uploads of Claude Code and Codex usage collected earlier; the daily views still count that previously uploaded usage alongside live and OMP usage.
 
 ---
 

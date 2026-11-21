@@ -25,7 +25,7 @@ munch ─────POST /functions/v1/ingest──────┘             
 | `allowlist` | Invited emails. Sign-up is rejected unless the email is listed. | Managed by hand |
 | `profiles` | Handle, display name, avatar. Created by a trigger on sign-up. | Until account deletion |
 | `api_keys` | SHA-256 hash and a display prefix. The plaintext `tm_…` key is shown once, when created. | Until revoked or deleted |
-| `usage_events` | One row per model call. Feeds Realtime, the activity feed, and the today/week totals. | Until the start of UTC day today−8 |
+| `usage_events` | One row per reported model call. The OMP plugin reports calls from inside OMP; `munch` reports supported calls routed through its local proxy. Feeds Realtime, the activity feed, and the today/week totals. | Until the start of UTC day today−8 |
 | `usage_daily` | Daily totals per user, provider, model and subagent flag, computed from `usage_events` | Forever |
 | `usage_history` | Imported pre-install daily totals per user and device (`/munch backfill`) | Forever (each upload replaces that device's previous one) |
 | `collector_contributions` | Permanently owned Claude Code/Codex canonical metadata, nullable accounting, history/live partition and supersession reservations | Until account deletion; source cleanup never deletes accepted rows |
@@ -96,7 +96,7 @@ A row has `day`, `provider`, `model`, `is_subagent`, `call_count`, the four toke
 
 ### `POST /functions/v1/contributions`
 
-The collector that used to upload Claude Code and Codex usage through this endpoint no longer exists, and no client currently posts to it. The endpoint and protocol remain for usage that was already uploaded (it stays counted in the views) and for possible future use. Claude Code and Codex are now reported live through `munch` and `ingest`. Deploy the migrations and function with the rest of the backend, because the views depend on them.
+The collector that used to upload Claude Code and Codex usage through this endpoint no longer exists, and no client currently posts to it. The endpoint and protocol remain for usage that was already uploaded and for possible future use; that earlier work stays visible in the views because the `collector_contributions` tables are retained in Postgres, so reading it doesn't depend on this endpoint being deployed. Claude Code and Codex are now reported live through `munch` and `ingest`. Keep deploying the migrations and function with the rest of the backend to preserve upload capability for the retained protocol.
 
 Each request includes `device_id` (stable source-isolated UUID), `harness` (`claude-code` or `codex`) and `snapshot_id` (UUID retained across exact retries). The first begin registers an immutable source cutoff and harness; another cutoff/harness for that device returns `409 cutoff_conflict`.
 
