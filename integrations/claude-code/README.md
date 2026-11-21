@@ -2,7 +2,7 @@
 
 Read-only, dependency-free source adapter and native plugin runtime integration for the [shared collector](../README.md). It reads only the explicitly selected Claude configuration root; it does not choose a home from environment variables, upload records, or change Claude files. Runtime: Node.js 26 or newer with native TypeScript stripping.
 
-The original [source plan](PLAN.md) and [accounting analysis](../../docs/claude-codex-backfill.md) remain historical design documents. This README describes the implemented interface, native plugin packaging, and evidence limits.
+The original [accounting analysis](../../docs/claude-codex-backfill.md) remains a historical design document. This README describes the implemented interface, native plugin packaging, and evidence limits.
 
 ## Native Claude Code plugin
 

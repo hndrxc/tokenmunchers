@@ -9,7 +9,7 @@ Native plugins and a standalone command-line collector that read token usage tha
 - **Credential safety.** The API key is read solely from the `TOKENMUNCHERS_API_KEY` environment variable at upload time. It is never stored in configuration files, saved in SQLite, passed as arguments, or displayed in model chat.
 - **Unknown stays unknown.** Missing output, cost, call count or provider are stored and shown as unknown (`null` / `"unknown"`), never as zero or a guessed provider.
 
-Source-specific parsing rules, fixture provenance and evidence limits: [Claude Code adapter](claude-code/README.md), [Codex adapter](codex/README.md). Historical design: [plan](PLAN.md) and [backfill analysis](../docs/claude-codex-backfill.md).
+Source-specific parsing rules, fixture provenance and evidence limits: [Claude Code adapter](claude-code/README.md), [Codex adapter](codex/README.md). Historical design: [backfill analysis](../docs/claude-codex-backfill.md).
 
 ## Contents
 
