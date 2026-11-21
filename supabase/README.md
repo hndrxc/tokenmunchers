@@ -9,10 +9,12 @@ Production project: `tokenmunchers` (`fywgkzqgtitpwijweojk`, us-east-2).
 ```
 OMP plugin ──POST /functions/v1/ingest──▶ ingest  ──rpc ingest()─────────▶ Postgres ──Realtime──▶ dashboard
            ──POST /functions/v1/history─▶ history ──rpc ingest_history()──┘   │
-                                                                              └─ pg_cron: rollups, retention, presence
+munch ─────POST /functions/v1/ingest──────┘                                    ├─ pg_cron: rollups, retention, presence
+Claude/Codex collectors ──POST /functions/v1/contributions─▶ contributions ──rpc publish_contributions()─┘
 ```
 
 - The Edge Functions check every field of a request against an allowlist and hash the API key. They then call `security definer` functions with the secret key. No client role can write usage data.
+- `munch` (the [local proxy](../proxy/README.md)) is a second client of `ingest`. It uses the same API key and sends only `usage` events, one per call it sees; it sends no `session_start`, `heartbeat` or `session_end`. Presence still works, because `ingest` also marks a session live from a fresh main-agent usage event.
 - Each API key is limited to 600 hits per minute, shared between `ingest`, `history` and `contributions` (history and contribution requests count as 10).
 - Measured on the live project: an ingest round trip takes ~0.2–0.3 s warm. From a model call finishing to the dashboard showing it takes 0.45–1.0 s.
 
@@ -36,7 +38,7 @@ Deleting an account cascades to every row the user owns.
 
 `ingest` rejects events older than 7 days, so a late event (from a retry queue) always lands on a UTC day between today−7 and today. Every 10 minutes, the `tokenmunchers-rollup` job recomputes the daily totals for exactly those days. Raw rows are kept until the start of today−8, so a recomputed day always still has all its raw rows. A recompute therefore never replaces a correct daily total with a partial one.
 
-History and live data never overlap: the plugin uploads history only for calls made before that machine's first live event.
+History and live data never overlap: the OMP plugin uploads history only for calls made before that machine's first live event.
 
 ### Read access
 
@@ -168,7 +170,7 @@ To run your own instance:
 3. **Deploy the Edge Functions:** `supabase functions deploy ingest history contributions`.
 4. **Enable OAuth providers.** Authentication → Sign In / Providers → GitHub and/or Discord. Each needs an OAuth app on that platform, with the callback URL shown in Supabase. Turn **off** the Email provider; it isn't used.
 5. **Set redirect URLs.** Authentication → URL Configuration: set Site URL to the dashboard URL. Under Redirect URLs, add the production URL and `http://localhost:3000/**`.
-6. **Point the dashboard and plugin at the project.** Use the dashboard's env vars (see the [dashboard README](../dashboard/README.md)). For the plugin, set `TOKENMUNCHERS_URL`, or change `DEFAULT_INGEST_URL` in [`plugin/src/config.ts`](../plugin/src/config.ts).
+6. **Point the dashboard, plugin and munch at the project.** Use the dashboard's env vars (see the [dashboard README](../dashboard/README.md)). For the plugin, set `TOKENMUNCHERS_URL`, or change `DEFAULT_INGEST_URL` in [`plugin/src/config.ts`](../plugin/src/config.ts). For [munch](../proxy/README.md), run `munch login --url <ingest url>` or set `TOKENMUNCHERS_URL`.
 
 ### Inviting members
 
