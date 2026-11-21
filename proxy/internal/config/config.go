@@ -6,14 +6,15 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"strconv"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Version is the munch release version, defaulting to the development version
@@ -69,6 +70,10 @@ type Config struct {
 	// omp-tokenmunchers plugin. `munch env` then keeps OMP out of the proxy
 	// environment so each OMP call is not reported a second time by the proxy.
 	OMPViaPlugin bool `json:"omp_via_plugin,omitempty"`
+
+	// A zero activation time leaves the corresponding desktop source disabled.
+	DesktopClaudeSince time.Time `json:"desktop_claude_since,omitzero"`
+	DesktopCodexSince  time.Time `json:"desktop_codex_since,omitzero"`
 }
 
 // Paths holds the resolved config and state directories.

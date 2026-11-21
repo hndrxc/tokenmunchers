@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -95,6 +94,8 @@ func (a *App) Run(args []string) int {
 		err = a.cmdUninstall(rest)
 	case "status":
 		err = a.cmdStatus(rest)
+	case "desktop":
+		err = a.cmdDesktop(rest)
 	case "pause":
 		err = a.cmdPause(rest, true)
 	case "resume":
@@ -139,6 +140,7 @@ Commands:
   update               Replace this binary with the latest stable Munch release
   uninstall            Stop and remove the service and remove Munch-managed shell and Codex setup
   status               Show proxy runtime, queue, and service status
+  desktop              Configure opt-in first-party desktop usage collection
   pause                Pause reporting (proxied AI traffic continues uninterrupted)
   resume               Resume reporting
   flush                Immediately flush queued usage events to TokenMunchers
@@ -339,9 +341,10 @@ func (a *App) cmdRun(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// The reporter only runs once the listener is bound, so a failed startup
-	// (e.g. address in use) never touches the network or the on-disk queue.
-	var reporterStarted atomic.Bool
+	// Neither reporter starts until bind succeeds, so a failed bind never
+	// scans desktop data, writes reporting state, or touches the network.
+	collector := &desktopRuntime{paths: paths, dir: desktopDir(paths), cfg: cfg, logger: logger}
+	reporterStarted := false
 	srv, err := proxy.New(proxy.Options{
 		Config:        cfg,
 		Paths:         paths,
@@ -352,9 +355,13 @@ func (a *App) cmdRun(args []string) error {
 		Verbose:       *verbose,
 		OnShutdownReq: cancel,
 		LocalKey:      localKey,
+		ClaudeLogs:    collector.claudeLogs(),
+		OnPauseChange: collector.setPaused,
+		DesktopStatus: collector.status,
 		OnReady: func() {
+			collector.start(ctx)
 			reporter.Start()
-			reporterStarted.Store(true)
+			reporterStarted = true
 			logger.Printf("listening on http://%s (paused=%v)", cfg.ListenAddr, cfg.Paused)
 		},
 	})
@@ -363,8 +370,10 @@ func (a *App) cmdRun(args []string) error {
 	}
 
 	runErr := srv.ListenAndServe(ctx)
+	cancel()
+	collector.stop()
 
-	if reporterStarted.Load() {
+	if reporterStarted {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		reporter.Stop(stopCtx)
 		stopCancel()
@@ -997,6 +1006,14 @@ func (a *App) cmdStatus(args []string) error {
 		if live.Ingest.LastError != "" {
 			fmt.Fprintf(a.Stdout, "Last Error:   %s\n", live.Ingest.LastError)
 		}
+		if live.Desktop != nil {
+			if live.Desktop.Error != "" {
+				fmt.Fprintf(a.Stdout, "Desktop:      %s\n", live.Desktop.Error)
+			}
+			if live.Desktop.Pending != nil {
+				fmt.Fprintf(a.Stdout, "Desktop:      %d pending requests\n", *live.Desktop.Pending)
+			}
+		}
 	} else {
 		rep := ingest.NewReporter(ingest.Options{QueuePath: paths.QueueFile()})
 		fmt.Fprintln(a.Stdout, "Status:       stopped")
@@ -1041,8 +1058,29 @@ func (a *App) cmdPause(args []string, pause bool) error {
 		if err != nil {
 			return err
 		}
+		desktopPath := desktopDir(paths)
+		if !pause && diskCfg.Paused && desktopEnabled(diskCfg) {
+			if _, err := os.Stat(desktopPath); errors.Is(err, os.ErrNotExist) {
+				// Without a ledger there is no durable pause window yet.
+				// Exclude records from before this resume conservatively.
+				now := time.Now().UTC()
+				if !diskCfg.DesktopClaudeSince.IsZero() {
+					diskCfg.DesktopClaudeSince = now
+				}
+				if !diskCfg.DesktopCodexSince.IsZero() {
+					diskCfg.DesktopCodexSince = now
+				}
+			}
+		}
+		var pauseErr error
+		if err := persistDesktopPause(desktopPath, pause, desktopEnabled(diskCfg)); err != nil {
+			pauseErr = fmt.Errorf("could not persist desktop reporting pause state: %w", err)
+			if !pause {
+				return pauseErr
+			}
+		}
 		diskCfg.Paused = pause
-		if err := config.Save(paths, diskCfg); err != nil {
+		if err := errors.Join(config.Save(paths, diskCfg), pauseErr); err != nil {
 			return err
 		}
 	}

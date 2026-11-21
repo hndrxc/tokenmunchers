@@ -4,6 +4,8 @@
 
 `munch` is a lightweight Go background proxy that captures token usage across common AI inference providers and streams metadata-only usage events directly to TokenMunchers via the existing `POST /functions/v1/ingest` API flow.
 
+For first-party desktop subscription usage without routing inference through Munch, see the opt-in [desktop accounting pilot](#desktop-accounting-pilot). It uses a separate reporting path from the proxy described below.
+
 - **No TLS interception or root CA:** binds to loopback and requires a private local URL for inference requests.
 - **Streaming passthrough:** SSE and NDJSON flush chunk by chunk. If the upstream body fails mid-stream, the client sees an interrupted response rather than a clean EOF. Usage extraction is bounded and may skip accounting on oversized input.
 - **HTTP/SSE only:** WebSocket upgrades are rejected (HTTP 426), so transports or client features that need WebSockets do not work through the proxy.
@@ -124,6 +126,54 @@ Then restart Codex (start a new `codex` process) and make a request. `requires_o
 
 ---
 
+## Desktop accounting pilot
+
+The pilot is off by default. It observes eligible local desktop usage without changing provider sign-in, subscription billing, or model routing. It does not cover cloud sessions, Cowork, or ordinary Claude or ChatGPT chat, and this pilot does not claim macOS runtime support.
+
+### Build, opt in, and check status
+
+Release archives are Linux/macOS only. For a native Windows build, run this in `proxy/` with Go 1.24+:
+
+```powershell
+go build -o munch.exe ./cmd/munch
+```
+
+The commands below use `munch` on `PATH`; in PowerShell, use `.\munch.exe` if running the binary from the current directory. On any platform, use the existing `munch login` to save your TokenMunchers key. Opt in to either collector independently:
+
+```text
+munch desktop claude on
+munch desktop codex on
+```
+
+If you already run a Munch service or background daemon, use `munch restart` to load the new settings. Otherwise, run `munch run` in a terminal and leave it running. To reload settings in foreground mode, stop it and run `munch run` again. Use `munch desktop` for collector status or `munch status` for daemon status including desktop pending delivery. If you use custom config or state directories, use the same directories for these commands and the daemon.
+
+### Claude Desktop: local Code only
+
+1. Run `munch desktop claude-env` privately. It prints a JSON map of environment variable names to string values, including a private local telemetry endpoint. Treat that endpoint capability like a password; don't share it in tickets, screenshots, logs, or config checked into version control.
+2. Merge that map into the `env` object in your Claude user `settings.json` (`CLAUDE_CONFIG_DIR` if set, otherwise `~/.claude`), or add the same name/value pairs to the saved environment for Desktop Local. Keep unrelated settings and environment entries. Do not overlay existing telemetry configuration, header helpers, or a managed exporter. If they're already configured, leave them alone rather than replacing them for the pilot.
+3. Restart Claude Desktop and start a **new local Code session**. Munch accepts eligible first-party Claude Desktop request telemetry, not ordinary chat or remote Code sessions.
+
+### ChatGPT Desktop: Codex on “This computer” only
+
+Select **This computer** in Codex in ChatGPT Desktop and keep its native `openai` model provider. Munch follows confirmed, uncompressed local Desktop rollouts and rescans retained active and archived rollouts across daemon downtime, counting only eligible usage from opt-in onward. It does not read legacy or compressed rollouts. If you use a custom `CODEX_HOME`, set it to the absolute path of the Desktop Codex home in the daemon's environment; setting it only in an interactive terminal does not change an installed service's environment. The default is `~/.codex`. There is no proxy URL to set and no CLI provider configuration to change. Do not also route or wrap the same desktop app usage for proxy accounting; the two reporting paths are separate.
+
+### What is counted and sent
+
+- One call per exact provider ID: a Claude request ID or a Codex response ID. Usage is live-only from opt-in activation; Munch does not backfill earlier history or infer calls from Codex `token_count` snapshots. If a safe model name is unavailable, it is reported as `unknown`.
+- Counts use the actual reported tokens. Claude reports ordinary input separately from cache reads and writes. Codex input includes cached input; Munch subtracts cached reads and writes from ordinary input so the cache tokens aren't counted twice. Reasoning tokens are not added on top of output. Cost is unknown, not a price estimate or subscription charge.
+- Munch sends only accounting metadata, including the actual provider request or response ID, through the TokenMunchers `/contributions` endpoint using your TokenMunchers key. It does not upload raw telemetry or rollout records, prompts, replies, tool content, session IDs, or provider credentials. Desktop usage contributes to existing dashboard accounting; it is not reported as proxy Activity, raw usage events, or Live now presence.
+- Desktop collection state and pending contributions are stored separately under `<state>/desktop/`. Pending contributions are durable across daemon restarts and retried if delivery fails. `munch pause` stops new accounting without affecting the apps; contributions already queued can still be delivered. `munch resume` resumes accounting. Only one daemon can own a desktop state directory at a time; a second daemon reports the local lock conflict. Separately, if TokenMunchers reports that an ID in a batch belongs to another account, Munch reports the delivery error and retains the original batch rather than taking ownership or dropping it.
+
+### Change the key or destination
+
+The desktop state directory is bound to the TokenMunchers key and contributions endpoint it first used. Changing either stops desktop reporting rather than sending pending data under a different identity. To deliver that data, restore the original key and endpoint. To start with a new key or destination, stop Munch, deliberately move `<state>/desktop/` aside, then turn each source you intend to keep using **off and back on** before restarting Munch. This resets each source's activation time so it doesn't replay usage from the previous identity; running `on` alone for an already enabled source does not reset it. Pending data does not transfer to the new directory. Don't delete the old directory unless you intend to discard its pending data.
+
+### Disable or uninstall
+
+Use `munch desktop claude off` and/or `munch desktop codex off`, then restart Munch (or stop and rerun the foreground process). When disabling Claude or uninstalling Munch, remove **only** the telemetry variables you added for this pilot from user settings or the Desktop Local saved environment. Restart Claude Desktop and use a new local Code session so it no longer has the old environment. There are no Codex provider settings from the pilot to undo. Disabling or uninstalling is not deletion of the desktop state directory or previously uploaded accounting.
+
+---
+
 ## What Munch changes
 
 Everything the installer script and `munch` write, start, or edit, and what stays behind. Nothing needs `sudo`, edits `PATH`, or installs a certificate, and Munch never reads or stores provider credentials.
@@ -145,12 +195,13 @@ Source builds on other systems use Go's user config and cache directories plus `
 
 | File | Contents and writers |
 | --- | --- |
-| `<config>/config.json` (`0600`, directory `0700`) | `api_key`, `ingest_url`, `listen_addr` (`munch login`); `api_key` when none is saved and `omp_via_plugin` (`munch install`); `paused` (`munch pause`/`resume`); `routes` (you) |
+| `<config>/config.json` (`0600`, directory `0700`) | `api_key`, `ingest_url`, `listen_addr` (`munch login`); `api_key` when none is saved and `omp_via_plugin` (`munch install`); `paused` (`munch pause`/`resume`); desktop collector opt-ins (`munch desktop`); `routes` (you) |
 | `<config>/local-auth.key` (`0600`) | Random 256-bit local secret, created on the daemon's first start or by `install`. The private `/_tm/<secret>` URL prefix, the control token, and the health proof derive from it; deleting it changes every private URL, so re-run `munch install` and open new shells. |
 | `<config>/prices.json` | Only if you create it ([pricing](#custom-model-pricing-pricesjson)) |
 | `<state>/queue.jsonl` (`0600`) | Events awaiting delivery; renamed to `queue.jsonl.<pid>.<n>.flushing` while sending, deleted once delivered |
 | `<state>/usage.jsonl` (`0600`) | One metadata line per recorded call, for `munch stats`; never trimmed or deleted by Munch |
 | `<state>/tmproxy.log`, `<state>/tmproxy.pid` | Daemon output under launchd and the fallback (systemd uses `journalctl --user -u tmproxy`); PID file for the fallback only, removed on stop |
+| `<state>/desktop/` | State and durable pending contributions for the [desktop accounting pilot](#desktop-accounting-pilot), separate from the proxy queue |
 
 ### Installer script and `munch login`
 
@@ -200,7 +251,7 @@ Release builds only (source builds report `dev`), on Linux or macOS, `amd64` or 
 | --- | --- | --- |
 | The service: `systemctl --user disable --now` and unit deleted, or `launchctl unload -w` and plist deleted; then any fallback daemon that proves the key is stopped and `tmproxy.pid` deleted | `munch env` lines you added yourself | The `munch` binary |
 | The marked block in the bash, zsh, and fish profiles above, whatever your current shell (an emptied `munch.fish` is deleted) | Munch settings you wrote or edited in Codex's `config.toml`, including the manual provider; revert them, because Codex can't connect once the proxy is gone | The config directory: API key, routes, `local-auth.key`, `prices.json` |
-| Unedited Munch blocks in `$CODEX_HOME/config.toml` and `~/.codex/config.toml`; the provider table stays while anything else still selects `munch_chatgpt` | The `omp-tokenmunchers` plugin and its config, which keep reporting OMP | The state directory: queued events (sent if you reinstall within 6.5 days), `usage.jsonl`, `tmproxy.log`; and a Codex `config.toml` left empty |
+| Unedited Munch blocks in `$CODEX_HOME/config.toml` and `~/.codex/config.toml`; the provider table stays while anything else still selects `munch_chatgpt` | The `omp-tokenmunchers` plugin and its config, which keep reporting OMP | The state directory: proxy queued events (sent if you reinstall within 6.5 days), `usage.jsonl`, `tmproxy.log`, and `<state>/desktop/` (including pending contributions); and a Codex `config.toml` left empty |
 
 Open shells keep their variables until you open a new terminal or run `eval "$(munch env --unset)"`, and running Codex processes use the proxy until restarted. To remove everything (Linux paths; on macOS use `~/Library/Application Support/tmproxy` and `~/Library/Caches/tmproxy`):
 
@@ -215,9 +266,9 @@ rm ~/.local/bin/munch
 ### No double counting and secrets
 
 - **OMP:** with omp-tm, the `omp` wrapper and `munch exec -- omp` hide every proxy variable so only the plugin reports it; without omp-tm, disable the plugin. See [Oh My Pi (omp-tm)](#oh-my-pi-omp-tm).
-- **Codex signed in with ChatGPT** ignores the proxy variables, so only the selected Munch provider routes it. [Uninstall the retired plugins](#retired-claude-code-and-codex-plugins), which would report the same calls. Only calls through the proxy are recorded.
-- **API key:** stored in `config.json`, copied to omp-tm only if you choose it, sent only to the ingest URL, and never printed (`login` and `status` say only whether one is configured).
-- **Private URLs** from `local-auth.key` appear only in `munch env` output, `munch routes --show-local-urls`, shell and `exec` environments, and Codex's `config.toml`. Provider credentials pass through to the upstream only. See [Privacy & Security](#privacy--security).
+- **Codex proxy accounting:** ChatGPT sign-in ignores the proxy environment variables, so only the selected Munch provider routes it. [Uninstall the retired plugins](#retired-claude-code-and-codex-plugins), which would report the same calls. Do not use proxy accounting and the desktop pilot for the same app usage.
+- **API key:** stored in `config.json`, copied to omp-tm only if you choose it, sent to TokenMunchers for proxy ingest or desktop contributions, and never printed (`login` and `status` say only whether one is configured).
+- **Private proxy URLs** from `local-auth.key` appear in `munch env` output, `munch routes --show-local-urls`, shell and `exec` environments, and Codex's `config.toml`. The Claude desktop telemetry endpoint is a separate private capability. Provider credentials pass through to the upstream only. See [Privacy & Security](#privacy--security).
 
 ---
 
@@ -337,7 +388,10 @@ Every command except `update` and `--version` accepts `--config-dir` and `--stat
 | `munch install [--yes] [--no-shell] [--no-codex]` | Set up the proxy and offer to configure OMP, the shell profile, and Codex (see [Quick Start](#quick-start)) |
 | `munch update` | Verify and install a newer stable Munch binary in place; restart a running daemon separately |
 | `munch uninstall` | Stop and remove the service and remove managed shell and Codex setup; keeps the binary, config and state directories, and the `omp-tokenmunchers` plugin ([details](#munch-uninstall)) |
-| `munch status [--json]` | Show runtime status, uptime, queue depth, delivered counts, and last error |
+| `munch status [--json]` | Show runtime status, uptime, queue depth, delivered counts, last error, and desktop pending status |
+| `munch desktop` | Show desktop collector status |
+| `munch desktop claude on/off` or `munch desktop codex on/off` | Enable or disable a desktop collector; restart the daemon to apply |
+| `munch desktop claude-env` | Print the private Claude Desktop telemetry environment as a JSON string map |
 | `munch pause` / `resume` | Stop/resume recording usage (AI traffic keeps proxying uninterrupted); persists across restarts |
 | `munch flush` | Force-flush queued usage events immediately |
 | `munch env [--check] [--unset] [--shell ...]` | Emit shell exports for common inference providers. When `omp` is on `PATH` or `omp_via_plugin` is set it also emits an `omp` wrapper that runs OMP without `OLLAMA_HOST` (or without every export when `omp_via_plugin` is set); `--unset` removes the wrapper too |
@@ -405,6 +459,6 @@ When an upstream reports cost directly (OpenRouter `usage.cost`, xAI `cost_in_us
 - The listener is loopback-only, rejects browser-originated requests, and sandboxes upstream content. Inference requires a private URL; control requests require a separate local credential. `munch exec` and, by default, `munch env` verify that the daemon knows the installation key before launching a client or emitting URLs.
 - Local capabilities protect against users who cannot read your private config or process environment. They do not protect against administrators, processes running as you, or a client that logs or forwards its URL. Don't publish the port through a tunnel, container mapping, or reverse proxy, and keep loopback out of any client-side HTTP proxy. Prefer `munch exec` over persistent exports: verification is done before launch, not for every SDK request, and a client can outlive the daemon.
 - Provider authentication and inference payloads pass through to the configured upstream, without the private route prefix or control headers. Upstream redirects are rejected so clients cannot leak private loopback URLs by following them. The proxy processes request and response data in memory to extract usage, but does not include that content in its telemetry.
-- The ingest destination must use HTTPS (or numeric-loopback HTTP for local testing) and redirects are not followed. TokenMunchers receives only the usage event fields: pseudonymous session and event IDs, timestamps, provider and model names, token counts, cost, and client metadata. Session pseudonyms are linkable within a daemon run but change after restart; the proxy does not upload the original session header or User-Agent as usage metadata. Model and provider names are still visible, so don't put secrets in custom names.
+- The ingest destination must use HTTPS (or numeric-loopback HTTP for local testing) and redirects are not followed. For proxy ingest, TokenMunchers receives only usage event fields: pseudonymous session and event IDs, timestamps, provider and model names, token counts, cost, and client metadata. Session pseudonyms are linkable within a daemon run but change after restart; the proxy does not upload the original session header or User-Agent as usage metadata. Model and provider names are still visible, so don't put secrets in custom names. Desktop contributions use [separate metadata-only reporting](#what-is-counted-and-sent).
 - `queue.jsonl` and `usage.jsonl` hold usage metadata only and are created `0600`; `usage.jsonl` is kept for `munch stats` until you delete it. Keep custom config and state directories private. Every file Munch writes is listed in [What Munch changes](#what-munch-changes).
 - Upgrading does not rewrite old queue files on disk. When the proxy next sends legacy entries, it replaces their original session IDs with a shared legacy label.
