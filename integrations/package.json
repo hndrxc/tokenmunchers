@@ -7,7 +7,7 @@
   "engines": { "node": ">=26" },
   "scripts": {
     "collect": "node collector/src/cli.ts",
-    "test": "node --test shared/test/*.test.ts collector/test/*.test.ts claude-code/test/*.test.ts codex/test/*.test.ts",
+    "test": "node --test shared/test/*.test.ts collector/test/*.test.ts claude-code/test/*.test.ts codex/test/*.test.ts plugin/test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

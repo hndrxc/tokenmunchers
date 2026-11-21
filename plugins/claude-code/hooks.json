@@ -1,0 +1,38 @@
+{
+  "description": "Tokenmunchers metadata accounting lifecycle hooks",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/integrations/plugin/src/cli.ts\" hook --source claude-code",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/integrations/plugin/src/cli.ts\" hook --source claude-code",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/integrations/plugin/src/cli.ts\" hook --source claude-code",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

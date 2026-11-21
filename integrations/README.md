@@ -1,10 +1,12 @@
-# Claude Code and Codex collector
+# Claude Code and Codex integrations
 
-A standalone command-line collector that reads token usage that **Claude Code** and the **Codex CLI** already record on disk and publishes metadata-only contributions to the tokenmunchers [`/functions/v1/contributions`](../supabase/README.md#post-functionsv1contributions) endpoint. It is separate from the OMP plugin: it doesn't use OMP's `ingest`/`history` functions, OMP's stats database, or OMP state.
+Native plugins and a standalone command-line collector that read token usage that **Claude Code** and the **Codex CLI** already record on disk, and publish metadata-only contributions to the tokenmunchers [`/functions/v1/contributions`](../supabase/README.md#post-functionsv1contributions) endpoint. Both approaches share the same underlying engine, run on **Node.js 26 or newer** (with native TypeScript execution and zero runtime dependencies), and operate independently of the OMP plugin.
 
+- **Native plugins with lifecycle-triggered automatic collection.** Claude Code (`tokenmunchers`) and Codex CLI (`tokenmunchers-codex`) plugins hook directly into session lifecycle events without background daemons.
 - **Explicit roots only.** You choose each source root once. The collector never discovers or scans home directories on its own and never reads `$CODEX_HOME`, `~/.claude` or `~/.codex` unless you name them.
-- **Metadata only.** Provider, model, token categories, call count, cost and its basis, original timestamp, session and subagent lineage, and canonical identity. Prompts, responses, tool calls, file contents and file or project paths are never persisted in the outbound projection or uploaded.
-- **Nothing uploads without confirmation.** Uploads need `--endpoint`, the `TOKENMUNCHERS_API_KEY` environment variable and `--confirm-upload`, and a preview prints first.
+- **Metadata only.** Provider, model, token categories, call count, cost and its basis, original timestamp, session and subagent lineage, and canonical identity. Prompts, responses, tool calls, file contents and file or project paths are never persisted in the outbound projection or uploaded. Hook stdin is immediately drained and ignored.
+- **Nothing uploads without confirmation.** Both manual snapshot uploads (`sync`) and recurring lifecycle uploads (`auto-on`) require explicit user consent (`--confirm-upload`). Default installation uploads nothing.
+- **Credential safety.** The API key is read solely from the `TOKENMUNCHERS_API_KEY` environment variable at upload time. It is never stored in configuration files, saved in SQLite, passed as arguments, or displayed in model chat.
 - **Unknown stays unknown.** Missing output, cost, call count or provider are stored and shown as unknown (`null` / `"unknown"`), never as zero or a guessed provider.
 
 Source-specific parsing rules, fixture provenance and evidence limits: [Claude Code adapter](claude-code/README.md), [Codex adapter](codex/README.md). Historical design: [plan](PLAN.md) and [backfill analysis](../docs/claude-codex-backfill.md).
@@ -12,9 +14,16 @@ Source-specific parsing rules, fixture provenance and evidence limits: [Claude C
 ## Contents
 
 - [Requirements and install](#requirements-and-install)
-- [Quick start](#quick-start)
-- [Commands](#commands)
-- [Flags](#flags)
+- [Native harness plugins](#native-harness-plugins)
+  - [Safe staging and local installation](#safe-staging-and-local-installation)
+  - [Remote Git installation](#remote-git-installation)
+  - [Installed cache containment](#installed-cache-containment)
+  - [Interactive user skills](#interactive-user-skills)
+  - [Lifecycle hook semantics and execution](#lifecycle-hook-semantics-and-execution)
+  - [Codex minimal hook flush semantics](#codex-minimal-hook-flush-semantics)
+  - [SQLite process serialization and missed hook safety](#sqlite-process-serialization-and-missed-hook-safety)
+- [Shared plugin runtime CLI](#shared-plugin-runtime-cli)
+- [Standalone collector CLI](#standalone-collector-cli)
 - [Status and preview output](#status-and-preview-output)
 - [Local state](#local-state)
 - [Credential](#credential)
@@ -30,77 +39,156 @@ Source-specific parsing rules, fixture provenance and evidence limits: [Claude C
 
 ## Requirements and install
 
-- **Node.js 26 or newer.** Sources are TypeScript run directly through Node's native type stripping. There are no runtime dependencies, so no install step is needed just to run the collector.
-- This is a private package (`tokenmunchers-collector`) with no published binary. Run it from this directory:
+- **Node.js 26 or newer.** Sources are TypeScript run directly through Node's native type stripping. There are no runtime dependencies, so no `npm install` or compile step is needed just to run the plugins or the standalone collector.
+- For local development, `npm install` inside `integrations/` installs TypeScript and `@types/node` for `npm run typecheck`.
+
+## Native harness plugins
+
+Tokenmunchers provides native installable plugins for both supported AI coding harnesses:
+
+| Harness | Plugin name | Marketplace | User skill | Invocation | Lifecycle hooks |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Claude Code** | `tokenmunchers` | `tokenmunchers` | `munch` | `/tokenmunchers:munch` (or `/munch`) | `SessionStart`, `SessionEnd`, `Stop` |
+| **Codex CLI** | `tokenmunchers-codex` | `tokenmunchers` | `tokenmunchers-codex:munch` | `$tokenmunchers-codex:munch` | `SessionStart`, `SessionEnd` |
+
+### Safe staging and local installation
+
+When installing plugins from a local directory, both Claude Code and Codex CLI register the marketplace source path and copy plugin files into their internal plugin caches (`~/.claude/plugins/cache` or `~/.codex/plugins/cache`). Running marketplace registration against an uncommitted working checkout would copy dirty files, `.env` secrets, and `node_modules`.
+
+To prevent secret leakage and keep the cache clean, always stage a clean plugin root first using `integrations/package-plugin.ts`:
 
 ```sh
-cd integrations
-npm run collect -- help          # same as: node collector/src/cli.ts help
+# 1. Stage clean plugin artifacts into an explicit empty directory
+export PLUGIN_DIR="$HOME/.local/share/tokenmunchers/plugin"
+mkdir -p "$PLUGIN_DIR"
+node integrations/package-plugin.ts --output "$PLUGIN_DIR"
+
+# 2. For Claude Code:
+claude plugin marketplace add "$PLUGIN_DIR"
+claude plugin install tokenmunchers@tokenmunchers
+
+# 3. For Codex CLI (subcommand is 'add', NOT 'install'):
+codex plugin marketplace add "$PLUGIN_DIR" --json
+codex plugin add tokenmunchers-codex@tokenmunchers --json
 ```
 
-From the repository root, use `node integrations/collector/src/cli.ts <command> …`. `npm install` is only needed for development: it installs TypeScript and `@types/node` for `npm run typecheck`.
+*Important:* The staging helper requires `--output` to name an explicit directory that is empty or does not yet exist (it refuses existing non-empty directories to guarantee clean packaging). Keep `$PLUGIN_DIR` intact on disk as long as the local marketplace remains registered in Claude Code or Codex. Only remove `$PLUGIN_DIR` after removing the marketplace registration (`claude plugin marketplace remove tokenmunchers` or `codex plugin marketplace remove tokenmunchers`).
+*(Codex verifies hook hashes before execution; approve the interactive trust prompt in the terminal. Do not advise `--dangerously-bypass-hook-trust` in normal use).*
 
-## Quick start
+### Remote Git installation
+
+Once changes are committed and pushed to the upstream Git repository:
+
+```sh
+# Claude Code:
+claude plugin marketplace add hndrxc/tokenmunchers
+claude plugin install tokenmunchers@tokenmunchers
+```
+
+### Installed cache containment
+
+The plugins use root-source packaging (`source: "."` or `{ "source": "local", "path": "." }`). When installed, the harness copies the entire repository structure required for runtime into its cache.
+- **Zero checkout dependency:** The installed plugin executes entirely from `${CLAUDE_PLUGIN_ROOT}` in the cache. Deleting or modifying the original checkout does not break the installed plugin.
+- **Zero build step:** Node >= 26 directly executes `<cache>/integrations/plugin/src/cli.ts`.
+
+### Interactive user skills
+
+Both plugins provide an administrative skill named `munch` designed for explicit user control:
+- **Invocation settings:**
+  - **Claude Code:** Configured with `disable-model-invocation: true` and `user-invocable: true` in `plugins/claude-code/skills/munch/SKILL.md`.
+  - **Codex CLI:** Configured with `user-invocable: true` in `plugins/codex/skills/munch/SKILL.md` and `policy: { allow_implicit_invocation: false }` in `plugins/codex/skills/munch/agents/openai.yaml` (Codex rejects Claude's `disable-model-invocation` frontmatter).
+- **Procedural and runtime safeguards:** No native harness policy can physically prevent a general-purpose model with shell access from executing arbitrary shell commands. However, the skill instructions strictly prohibit autonomous invocation or inferred consent, and the runtime CLI enforces explicit human confirmation flags (`--confirm-upload`) before making any network requests or modifying recurring configuration.
+- **Explicit root selection:** Activation requires the user to supply an explicit `--root` path (e.g. `~/.claude` or `~/.codex`). The model never guesses roots.
+- **Credential protection:** The skill instructs the user to export `TOKENMUNCHERS_API_KEY` in their terminal. It never asks the user to paste an API key into chat. Tool subshells in Codex may filter environment variables matching `*KEY*` or `*TOKEN*`; when tool filtering prevents access to the key, users should run manual `sync` in their launch terminal outside Codex or enable recurring hooks (`$tokenmunchers-codex:munch auto-on --confirm-upload`), which execute with host terminal environment inheritance.
+- **Invocation routes:** In Claude Code, invoke via `/tokenmunchers:munch` (or `/munch`). In Codex CLI, the host app-server discovers and registers the plugin skill namespaced as `tokenmunchers-codex:munch` (plain `$munch` is not registered by the host), so invoke via `$tokenmunchers-codex:munch` (which injects full runtime instructions in both interactive sessions and `codex exec`). Alternatively, scripts or headless workflows can invoke the installed plugin runtime CLI directly (`node <cache_root>/integrations/plugin/src/cli.ts <COMMAND> --source codex [options]`).
+
+### Lifecycle hook semantics and execution
+Lifecycle hooks run via command invocations in `plugins/claude-code/hooks.json` and `plugins/codex/hooks.json`:
+- **Execution models:**
+  - **Claude Code:** Hooks (`SessionStart`, `SessionEnd`, `Stop`) specify `"async": true` and are spawned detached in the background without delaying inference or exit.
+  - **Codex CLI 0.154.0:** `SessionStart` runs detached in the background (`async: true`). However, Codex applies a synchronous host override to `SessionEnd` during process teardown (`running async SessionEnd hook synchronously`), ensuring flushed transcripts are collected before exit. Active model inference is never delayed, but exiting Codex may wait up to the configured hook timeout (`timeout: 10` seconds on `SessionEnd`). If network delivery times out or is interrupted at shutdown, the uncommitted snapshot and acknowledged request metadata are retained locally in SQLite (never committed remotely when incomplete), and actual upload resumes on the next opted-in lifecycle hook (such as `SessionStart` or `SessionEnd`) or explicitly confirmed manual sync (`$tokenmunchers-codex:munch sync`). (`$tokenmunchers-codex:munch preview` scans locally only and does not trigger network delivery).
+  - **Void stdin (metadata-only privacy):** Harnesses pipe turn transcripts and user prompts to hook stdin. The hook runner immediately drains and unrefs `process.stdin` without parsing, storing, or logging any turn content. (To collect accounting metrics, the engine scans local files on disk, but parses and persists allowlisted metadata only—never prompt, response, or code text).
+
+### Codex minimal hook flush semantics
+
+Codex CLI 0.154.0 hooks use minimal reliable triggers: `SessionStart` and `SessionEnd`.
+- Codex flushes the session transcript and turn usage to disk before triggering `SessionEnd`.
+- If an unexpected termination races with or prevents the final flush before exit, the next lifecycle event (`SessionStart`), `$tokenmunchers-codex:munch preview`, or manual `$tokenmunchers-codex:munch sync` scans accessible flushed logs on disk (usage never written to disk by the harness or lost before writing cannot be recovered).
+### SQLite process serialization and missed hook safety
+
+Rapid turn generation or multiple open sessions can invoke lifecycle hooks concurrently:
+- **SQLite process lock:** The hook runner acquires a non-blocking SQLite lock transaction in `<state>/<harness>.lock.sqlite` held across operations and automatically released by the OS on process exit (no PID file tracking, mtime staleness, or manual lock deletion). If an active worker is already scanning or delivering, subsequent hooks skip safely without blocking or queueing duplicate processes.
+- **Catch-up semantics:** Any records flushed to disk while a hook was busy or skipped will be scanned during the next preview, or scanned and delivered during the next opted-in lifecycle event or confirmed manual sync (limited to accessible flushed disk logs; preview never delivers).
+- **No historical completeness claim:** Only usage recorded in accessible, on-disk session files can be collected. Sessions deleted before scanning or unrecorded by the harness cannot be recovered.
+## Shared plugin runtime CLI
+
+The shared runtime CLI (`integrations/plugin/src/cli.ts`) powers both native hooks and user skills:
+
+```sh
+node "${CLAUDE_PLUGIN_ROOT}/integrations/plugin/src/cli.ts" <COMMAND> --source claude-code|codex [options]
+```
+
+### Commands
+
+| Command | What it does | Uploads? |
+| :--- | :--- | :--- |
+| `activate` | Registers explicit source `--root` (required) and optional `--exclude` prefixes. Establishes immutable cutoff timestamp and device UUID. Calling again with identical arguments is a no-op; different arguments throw an error. | No |
+| `preview` | Runs a local scan of the root, records new observations in SQLite, and prints a compact metadata-only summary. Any field with unknown coverage has its total reported as `null` (no known subtotal mislabelled as a total; genuine complete counts remain 0). Never triggers network delivery. | No |
+| `status` | Reads and prints current ledger summary, cutoff, pause state, and auto-upload consent without scanning. | No |
+| `sync` | **Scans the source root first**, then uploads the full retained ledger snapshot. Requires `--confirm-upload` and `TOKENMUNCHERS_API_KEY`. Without confirmation, prints preview and exits before any network call. | Yes (with `--confirm-upload`) |
+| `auto-on` | Enables recurring background uploads when lifecycle hooks execute. Requires `--confirm-upload` and an activated source. Writes `<state>/<harness>-plugin.json`. | Config only |
+| `auto-off` | Revokes recurring background hook uploads. Does not reset device identity, cutoff, or ledger records. | No |
+| `pause` | Opens a pause window at the current timestamp for this source. Usage timestamped during the pause is permanently excluded. | No |
+| `resume` | Closes the open pause window. Prints status. | No |
+| `hook` | Executed by native lifecycle hooks. Drains stdin. Skips if unactivated. Acquires non-blocking SQLite process lock (`<state>/<harness>.lock.sqlite`, skips if busy). Scans via Collector. Delivers only if `auto-on` is consented and `TOKENMUNCHERS_API_KEY` is present. Skips delivery if paused. Suppresses delivery if no new records exist. | Yes (if `auto-on` + key) |
+| `help` | Prints CLI usage and options. | No |
+
+*Key differences on `sync`:* The plugin `sync` scans the source root into the ledger first and then delivers the snapshot, unlike the standalone CLI `sync` which only uploads the already retained ledger without scanning (run `collect` first when using the standalone CLI). Do not run the standalone `watch` loop concurrently with native plugin hooks.
+### Flags
+
+| Flag | Commands | Meaning |
+| :--- | :--- | :--- |
+| `--source claude-code\|codex` | all | Target harness. Required on all commands. |
+| `--root PATH` | `activate` | Explicit source directory (e.g. `~/.claude` or `~/.codex`). Stored as absolute path and immutable afterwards. |
+| `--exclude PREFIX` | `activate` | Path prefix to exclude (repeatable). Not a glob. |
+| `--state DIR` | all | Local state directory. Default: `~/.local/state/tokenmunchers-collector`. *Caveat:* Installed native hooks invoke statically without `--state` and always resolve to the default directory; `--state DIR` in manual/testing commands does not redirect registered native hooks, so `auto-on` configured in a custom state directory is not picked up by default hooks. |
+| `--endpoint URL` | `sync`, `hook` | Contributions endpoint. Default: Supabase production URL. HTTPS required unless localhost. |
+| `--confirm-upload` | `sync`, `auto-on` | Explicit user confirmation to upload. Without it, nothing is transmitted. |
+| `--max-bytes N` | `preview`, `sync`, `hook` | Scan batch size limit (default: 64 MiB). |
+| `--max-line-bytes N` | `preview`, `sync`, `hook` | Scan line size limit (default: 1 MiB). |
+| `--help` | all | Prints usage. |
+
+## Standalone collector CLI
+
+The standalone collector in `integrations/collector/src/cli.ts` (runnable via `npm run collect -- ...`) remains supported for manual scans, archive backfilling, or headless environments:
 
 ```sh
 cd integrations
 
-# 1. Activate each source once with its explicit root (pick one or both).
+# 1. Activate explicit root
 npm run collect -- activate --source codex --root ~/.codex
-npm run collect -- activate --source claude-code --root ~/.claude --exclude projects/-home-me-client-work
 
-# 2. Scan locally and inspect the preview. Nothing is uploaded.
+# 2. Scan locally (records to SQLite ledger; nothing uploaded)
 npm run collect -- preview --source codex
 
-# 3. Create an API key in the dashboard (Settings → API keys), then upload.
+# 3. Upload retained ledger snapshot
 export TOKENMUNCHERS_API_KEY=tm_...
 npm run collect -- sync --source codex \
   --endpoint https://fywgkzqgtitpwijweojk.supabase.co/functions/v1/contributions --confirm-upload
 
-# 4. Optional: keep collecting. Scans every 60 s and uploads after each scan.
+# 4. Optional: keep collecting via polling loop
 npm run collect -- watch --source codex \
   --endpoint https://fywgkzqgtitpwijweojk.supabase.co/functions/v1/contributions --confirm-upload
 ```
 
-The contributions endpoint works only after the collector migration and the `contributions` Edge Function are deployed (see [supabase/README.md](../supabase/README.md#deploying)). Each source is activated, paused and uploaded on its own. Repeat each command with `--source claude-code` for Claude Code.
-
-## Commands
-
-Every command except `help` requires `--source claude-code|codex`. Output is JSON on stdout. Errors print one line on stderr and set exit code 1.
-
-| Command | What it does | Uploads? |
-| --- | --- | --- |
-| `activate` | Registers the source with `--root` (required) and optional `--exclude` prefixes. Creates a random source-isolated device UUID and records the **cutoff** as the current time. Running it again with the same root and exclusions is a no-op that returns the original cutoff. A different root or different exclusions is rejected. | No |
-| `preview` | Runs one bounded scan of the activated root, records normalized metadata into the local ledger, then prints the preview. | No |
-| `collect` | Same local operation as `preview`. Use it in scripts where "preview" reads oddly. | No |
-| `sync` | Prints the preview of the retained ledger, then uploads the **whole retained ledger** as one staged snapshot. Requires `--endpoint`, `--confirm-upload` and `TOKENMUNCHERS_API_KEY`. Without `--confirm-upload` it prints the preview and exits with an error before any network request. `sync` does not scan; run `collect` first. | Yes |
-| `watch` | Loops: scan, print the preview, then upload if `--confirm-upload` is set and the source isn't paused. Then it waits `--interval-ms`. Scan or upload errors print and the loop continues. `Ctrl-C`/`SIGTERM` stops it. | Only with `--confirm-upload` |
-| `pause` | Opens a pause for this source at the current time (see [Pause and resume](#pause-and-resume)). Prints status. | No |
-| `resume` | Closes the open pause at the current time. Prints status. | No |
-| `status` | Prints the preview from local state without scanning. | No |
-| `help` | Prints usage. | No |
-
-`--root` and `--exclude` are accepted only by `activate`. Later commands reuse the stored selection and reject those flags.
-
-## Flags
-
-| Flag | Commands | Meaning |
-| --- | --- | --- |
-| `--source claude-code\|codex` | all | Which source. Required, no default. |
-| `--root DIR` | `activate` | Explicit source root, typically your Claude configuration directory (`~/.claude`) or Codex home (`~/.codex`). Stored as an absolute path and immutable afterwards. |
-| `--exclude PREFIX` | `activate` (repeatable) | Root-relative path prefix to skip, for example `projects/-home-me-client` or `sessions/2026/01`. Not a glob. |
-| `--state DIR` | all | Local state directory. Default `~/.local/state/tokenmunchers-collector`. |
-| `--max-bytes N` | `preview`, `collect`, `watch` | Bytes read per scan (default 64 MiB; for Codex `.zst` it also bounds compressed and decompressed bytes). Larger archives continue on the next scan. |
-| `--max-line-bytes N` | `preview`, `collect`, `watch` | Longest record parsed (default 1 MiB). Longer records are skipped with a diagnostic. |
-| `--endpoint URL` | `sync`, `watch` | Contributions endpoint. Must be `https://`; `http://` is allowed only for `localhost`, `127.0.0.1` and `[::1]`. |
-| `--confirm-upload` | `sync`, `watch` | Explicit consent to upload. Without it nothing is sent. |
-| `--interval-ms N` | `watch` | Delay between watch iterations (default 60000, minimum 1000). |
-| `--help` | all | Prints usage. |
+*Concurrency warning:* Do not run the standalone `watch` loop concurrently with native plugin hooks.
 
 ## Status and preview output
 
-`status`, `preview`, `collect`, `pause`, `resume` and the first part of `sync`/`watch` print the same object:
+The standalone collector CLI (`npm run collect -- preview/status`) and shared plugin CLI (`preview`/`status`/`sync`) display consistent metadata accounting:
 
+### Standalone collector output
+`collect`, `status`, `preview`, `pause`, `resume` and the first part of `sync`/`watch` print the detailed ledger state:
 | Field | Meaning |
 | --- | --- |
 | `harness`, `root`, `cutoff`, `device_id`, `exclusions` | The immutable activation. |
@@ -113,7 +201,7 @@ Every command except `help` requires `--source claude-code|codex`. Output is JSO
 | `qualities` | Counts per quality: `observed`, `reconstructed`, `partial`, `summary`. |
 | `weak_identity_count` | Contributions with only a scoped (single-owner) identity. See [Ownership limits](#ownership-limits). |
 | `ownership_policy` | Reminder of the single-owner rule. |
-| `days` | UTC daily totals per provider/model/subagent flag. A sum that includes an unknown value is `null`, with `known_subtotals` alongside, plus the qualities and cost bases that went into each day. |
+| `days` | UTC daily totals per provider/model/subagent flag. A sum that includes an unknown value is `null`, with `known_subtotals` alongside, plus the qualities and cost bases that went into each day. Known subtotals are never mislabelled as complete totals. |
 | `withheld` | Counts of contributions excluded from totals and upload, by reason (see [below](#what-is-withheld-from-upload)). |
 | `progress` | Last scan: count, observations returned, diagnostic code counts, time. |
 | `scan_pending.cursor` / `.continuation` | Where the next bounded scan resumes (local root-relative positions; never uploaded). |
@@ -124,20 +212,28 @@ Every command except `help` requires `--source claude-code|codex`. Output is JSO
 | `pending_snapshot` | Snapshot UUID staged but not yet committed. |
 | `pending_acknowledged` | `{ requests, chunk_count }`: how many of that snapshot's requests (begin, then chunks) the endpoint already acknowledged. The next `sync` resumes there. |
 
-Scans also print `latest_scan`: duplicates merged, the excluded count, rows rejected by metadata validation (`rejected`, also counted as `INVALID_OBSERVATION` in `progress.diagnostics`), local diagnostics (code plus root-relative file and line), project names found under the root (Claude), and adapter progress. All of it is local only.
+### Plugin compact status output
+The shared plugin CLI prints a compact summary object (`formatCompactStatus`):
+`{ harness, root, device_id, cutoff, paused, recurring_upload, endpoint, range_utc, retained_contributions, live, history, excluded, totals, qualities, unknown, weak_identity_count, exclusions, diagnostics, progress, pending_snapshot, pending_acknowledged }`.
 
+- **Nullable compact totals (`totals`):** Includes `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `call_count`, and `cost_usd`. Any field with missing or unverified coverage (such as unpriced Codex rollouts or unverified Claude output) is reported as `null`, avoiding known-subtotal mislabelling. Complete fields with genuine zero usage remain numeric `0`.
+- **Separate known subtotals:** In daily aggregates (`days[].known_subtotals`), known subtotals are tracked alongside `null` sums and are never conflated with complete totals.
+
+Scans also print `latest_scan`: duplicates merged, the excluded count, rows rejected by metadata validation (`rejected`, also counted as `INVALID_OBSERVATION` in `progress.diagnostics`), local diagnostics (code plus root-relative file and line), project names found under the root (Claude), and adapter progress. All of it is local only.
 ## Local state
 
 - One SQLite file, `<state>/ledger.sqlite`. The directory is created with mode `0700` and the file is forced to `0600`. Each change runs in one `BEGIN IMMEDIATE` transaction with `synchronous=FULL`, so a crash or kill leaves either the previous state or the new one, never a partial scan.
 - Contents per source: root, exclusions, device UUID, cutoff, pause windows, the normalized metadata ledger keyed by canonical ID, excluded/superseded/conflicting IDs, identity aliases and which of them are material for upload, rejected-row field codes keyed by canonical-ID digest, scan cursor/continuation, last-scan progress, and the pending snapshot with its acknowledged progress. Every read and write is validated against a strict schema. A hand-edited or corrupted file fails with `Invalid protected ledger state` instead of being trusted. State written before alias materiality was tracked still loads; all of its existing aliases are treated as material.
+- **Per-harness plugin configuration:** In addition to `ledger.sqlite`, recurring hook delivery consent and settings are saved in `<state>/<harness>-plugin.json` (forced to mode `0600`). It tracks `{ auto_upload: boolean, endpoint?: string, updated_at: string }`. Disabling auto-upload (`auto-off`) updates this file without touching `ledger.sqlite` or resetting device identities. Installed native lifecycle hooks invoke statically without `--state` and always read from the default state directory (`~/.local/state/tokenmunchers-collector`), so `auto-on` configured under a custom `--state` directory is not picked up by native hooks.
+- **Process serialization:** Per-harness SQLite lock databases (`<state>/<harness>.lock.sqlite`) hold an active transaction to serialize native hook and CLI executions, preventing overlapping scans or uploads with automatic OS-level release on exit.
 - Never stored: raw records, prompts, responses, tool content or local diagnostic messages. The API key isn't stored either.
 - One state directory holds at most one Claude Code source and one Codex source. To collect a second installation (another `CODEX_HOME`, for example), use a separate `--state` directory. It gets its own device UUID and cutoff.
 - Don't delete or copy the state directory to start over. A new state directory is a new device, and identities it shares with uploads from the old device are rejected as ownership conflicts (see [Ownership limits](#ownership-limits)).
+- **One shared default directory.** Both native plugins and the standalone CLI use `~/.local/state/tokenmunchers-collector` unless you pass `--state`. Never delete or recreate it to start over: that creates a new device UUID and previously uploaded records then fail with `409 ownership_conflict`.
 
 ## Credential
 
-`TOKENMUNCHERS_API_KEY` is read from the environment at `sync`/`watch` time and sent as `Authorization: Bearer …`. It is never written to state or printed. Use a dedicated key per machine from dashboard Settings. The key's rate budget is shared with any OMP plugin using the same key. A `401`/`403` stops the upload with `Collector API key unauthorized`, and the staged snapshot is kept for the next attempt.
-
+`TOKENMUNCHERS_API_KEY` is read from the environment at `sync`/`watch` and hook upload time, sent as `Authorization: Bearer …`. It is never written to state, saved in configuration, passed as arguments, or printed. Use a dedicated key per machine from dashboard Settings. The key is **not** required when activating or configuring `auto-on` (which records user consent locally), but is strictly required when network delivery executes. A `401`/`403` stops the upload with `Collector API key unauthorized`, and the staged snapshot is kept for the next attempt.
 ## Cutoff: history vs. live
 
 - `activate` stores the current UTC time as the source's **cutoff**. It never moves. Re-activation returns the original, and the server rejects a different cutoff for the same device (`409 cutoff_conflict`).
@@ -173,7 +269,7 @@ These stay in the local ledger and show up in `withheld`, but are never uploaded
 
 1. **Freeze.** On first attempt, every uploadable contribution plus explicit supersessions and material identity aliases is copied into `pending` with a new `snapshot_id`. An alias is material only when this device recorded a request-identity fallback before its response, or merged a later fallback through it. Aliases for responses whose request was never recorded stay local: they still fold any later fallback into the response, so it can't come back as a separate request. A failed upload keeps that exact snapshot, and every retry resends it. Scans that happen meanwhile are included in the next snapshot, after this one commits.
 2. **Partition.** The snapshot is split deterministically into chunks of at most 500 entries and 256 KiB per request body. More than 1,000 chunks is refused.
-3. **`begin`** (with `cutoff` and `chunk_count`), each **`chunk`** in order, then **`commit`**. The server publishes atomically at commit. An interrupted upload leaves the last committed totals unchanged, and source files deleted since earlier uploads don't remove accepted contributions.
+3. **`begin`** (with `cutoff` and `chunk_count`), each **`chunk`** in order, then **`commit`**. The server publishes atomically at commit. Interrupted snapshots or acknowledged request counts are retained locally in SQLite and are **never committed remotely when incomplete**; the server's committed totals remain unchanged until commit succeeds. Source files deleted since earlier uploads don't remove accepted contributions.
 4. **Acknowledge.** The pending snapshot is cleared and `delivered_at` recorded only after a valid commit acknowledgment. `sync` prints `{ accepted, snapshot_id, resumed_at_request, rate_limit_waits }`.
 
 Retry and resume rules:
@@ -216,17 +312,26 @@ npm run typecheck      # tsc --noEmit over shared, collector, claude-code, codex
 npm test               # node --test over all four suites
 ```
 
+### Native verification and parent observations
+Parent smoke testing verified both native CLI install and lifecycle hook cycles using local mock providers and fixture metadata in isolated sandboxes:
+- Verified Claude Code marketplace addition, installation of `tokenmunchers@tokenmunchers`, and detached async hooks (`SessionStart`, `SessionEnd`, `Stop`).
+- Verified Codex CLI 0.154.0 marketplace addition, addition of `tokenmunchers-codex@tokenmunchers`, background `SessionStart`, and synchronous teardown override on `SessionEnd` (`running async SessionEnd hook synchronously`) with configured 10-second timeout.
+- Verified default installation makes zero network uploads, and hook runs cleanly skip when unactivated or unconsented.
+These verification runs test harness integration mechanics and do not represent an expansion of real-version or provider evidence beyond the cataloged fixtures.
+
 Layout:
 
 | Path | Role |
-| --- | --- |
+| :--- | :--- |
 | `shared/src/observations.ts` | Adapter contract: `Observation`, `Diagnostic`, `ScanOptions`, `AdapterResult`, `Adapter`. |
 | `shared/src/metadata.ts` | The single persistence/outbound allowlist (`metadata`, `outbound`) and deterministic `reconcile`. |
 | `shared/src/aggregate.ts` | `attributionIssue` (withholding reasons) and nullable UTC daily `aggregate`. |
 | `shared/src/ledger.ts`, `shared/src/state.ts` | Durable SQLite ledger: activation, record, pause; strict state validation. |
 | `shared/src/delivery.ts` | Staged snapshot delivery with rate-reset waits and resumable progress. |
-| `collector/src/collector.ts`, `collector/src/cli.ts` | Scan orchestration, preview, and the CLI. |
+| `collector/src/collector.ts`, `collector/src/cli.ts` | Scan orchestration, preview, and standalone collector CLI. |
 | `claude-code/`, `codex/` | Read-only source adapters (`scan(root, options)`). |
+| `plugin/src/` | Shared native plugin runtime CLI (`cli.ts`), hooks runner, lock (`lock.ts`), config (`config.ts`), and compact formatting (`format.ts`). |
+| `package-plugin.ts` | Safe clean staging helper for local plugin marketplace distribution. |
 
 ## Acceptance scenario map
 

@@ -1,8 +1,44 @@
 # Claude Code transcript adapter
 
-Read-only, dependency-free source adapter for the [shared collector](../README.md). It reads only the explicitly selected Claude configuration root; it does not choose a home from environment variables, upload records, or change Claude files. Runtime: Node.js 26 or newer with native TypeScript stripping.
+Read-only, dependency-free source adapter and native plugin runtime integration for the [shared collector](../README.md). It reads only the explicitly selected Claude configuration root; it does not choose a home from environment variables, upload records, or change Claude files. Runtime: Node.js 26 or newer with native TypeScript stripping.
 
-The original [source plan](PLAN.md) and [accounting analysis](../../docs/claude-codex-backfill.md) remain historical design documents. This README describes the implemented interface and its evidence limits.
+The original [source plan](PLAN.md) and [accounting analysis](../../docs/claude-codex-backfill.md) remain historical design documents. This README describes the implemented interface, native plugin packaging, and evidence limits.
+
+## Native Claude Code plugin
+
+This adapter is packaged as a first-class native plugin for Claude Code:
+- **Marketplace Manifest:** `.claude-plugin/marketplace.json` (marketplace `tokenmunchers`, plugin `tokenmunchers`, root source `.`).
+- **Plugin Manifest:** `.claude-plugin/plugin.json` (hooks `./plugins/claude-code/hooks.json`, skills `./plugins/claude-code/skills`).
+- **Slash Command Skill:** `/tokenmunchers:munch` (aliased to `/munch` when unambiguous), defined at `plugins/claude-code/skills/munch/SKILL.md` with `user-invocable: true` and `disable-model-invocation: true`. Procedural skill instructions prohibit autonomous execution or inferred consent, and runtime CLI flags require explicit human approval for uploads.
+- **Lifecycle Hooks:** `SessionStart`, `SessionEnd`, and `Stop` hooks in `plugins/claude-code/hooks.json` execute `node "${CLAUDE_PLUGIN_ROOT}/integrations/plugin/src/cli.ts" hook --source claude-code` detached in the background (`"async": true`) without delaying inference turns or exit.
+- **Stdin Voiding:** Claude Code pipes turn transcripts to hook stdin. The hook runner immediately drains and ignores stdin without parsing, ensuring prompt, code, and response confidentiality (local files on disk are scanned for allowlisted metadata only—never prompt, response, or code text).
+- **Process Serialization:** An atomic SQLite process lock (`<state>/claude-code.lock.sqlite`) serializes hook runs; busy hooks skip cleanly, and subsequent hooks or manual sync scan accessible flushed disk logs.
+
+### Safe staging and installation
+
+Local marketplace installation registers the staged source path and copies files into `~/.claude/plugins/cache`. To avoid copying uncommitted files, `.env` secrets, or build directories into the cache, always stage clean plugin artifacts first:
+
+```sh
+# 1. Stage clean plugin artifacts into an explicit empty directory
+export PLUGIN_DIR="$HOME/.local/share/tokenmunchers/plugin"
+mkdir -p "$PLUGIN_DIR"
+node integrations/package-plugin.ts --output "$PLUGIN_DIR"
+claude plugin marketplace add "$PLUGIN_DIR"
+claude plugin install tokenmunchers@tokenmunchers
+```
+
+*Important:* The staging helper requires `--output` to name an explicit directory that is empty or does not yet exist (it refuses existing non-empty directories to guarantee clean packaging). Keep `$PLUGIN_DIR` intact on disk as long as the local marketplace remains registered in Claude Code. Only remove `$PLUGIN_DIR` after removing the marketplace registration (`claude plugin marketplace remove tokenmunchers`).
+Once installed in the harness cache, the plugin is completely self-contained and has zero runtime dependence on the original checkout directory.
+
+### Plugin commands (`/munch`)
+
+- `/munch activate --root "$HOME/.claude/projects" [--exclude <prefix>]`: Initializes local ledger state with an explicit directory. No data is uploaded.
+- `/munch preview`: Runs a local scan using this adapter and displays a compact metadata-only summary without uploading (fields with unverified or missing coverage report as `null`, avoiding known-subtotal mislabelling; genuine complete counts remain numeric 0). Never triggers network delivery.
+- `/munch status`: Inspects current state and consent without scanning.
+- `/munch sync`: Scans for new usage first, then uploads a contribution snapshot with explicit user confirmation (`--confirm-upload`). Requires `TOKENMUNCHERS_API_KEY` exported in the environment.
+- `/munch auto-on`: Enables recurring background uploads on `SessionStart`, `SessionEnd`, and `Stop` lifecycle hooks (requires `--confirm-upload`).
+- `/munch auto-off`: Disables recurring background uploads immediately without resetting device identity or cutoff.
+- `/munch pause` / `/munch resume`: Pauses or resumes tracking for `claude-code`. Observations timestamped during pause windows are permanently excluded.
 
 ## Interface and discovery
 
@@ -58,7 +94,7 @@ Synthetic fixtures, redacted real captures, and test-generated records are catal
 
 Two consented, isolated real sessions are checked in as metadata-only projections (`test/fixtures/real-2.1.312-*.jsonl`), captured with the recorded allowlist [test/fixtures/redact-real.jq](test/fixtures/redact-real.jq). They were produced by Claude Code 2.1.312 (the CLI auto-updated from 2.1.263 earlier in the session; see the manifest). In them, saved per-message output equals the final value, repeated frames of a multi-block response carry identical usage, and per-model sums over distinct message IDs equal the latest cost-state exactly; the SDK result output totals also matched.
 
-This evidence is scoped to one producer build, `claude-haiku-5-5` only, and first-party default authentication. It has no subagent, no compaction, no thinking or server tools, and covers two short sessions. Output verification therefore relies on exact per-session equality, never on the version, and anything outside that equality stays unverified.
+This evidence is scoped to one producer build, `claude-haiku-5-5` only, and first-party default authentication. It has no subagent, no compaction, no thinking or server tools, and covers two short sessions. Output verification therefore relies on exact per-session equality, never on the version, and anything outside that equality stays unverified. Parent testing additionally observed native CLI installation (`tokenmunchers@tokenmunchers`) and lifecycle hook cycles (`SessionStart`, `SessionEnd`, `Stop`) using local mock providers and fixture metadata in an isolated sandbox, confirming detached background execution and zero default network uploads without expanding real-session evidence.
 
 ## Acceptance mapping and parent-run gates
 

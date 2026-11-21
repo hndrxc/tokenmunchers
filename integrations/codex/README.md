@@ -1,8 +1,62 @@
 # Codex CLI rollout adapter
 
-Read-only, dependency-free source adapter for the [shared collector](../README.md). It reads only the explicitly selected Codex home; it never falls back to `$CODEX_HOME`/`~/.codex` by itself, never reads credentials, `auth.json`, SQLite state or config, makes no network calls, and never modifies rollouts. Runtime: Node.js 26 or newer with native TypeScript stripping and built-in `node:zlib` Zstandard.
+Read-only, dependency-free source adapter and native plugin runtime integration for the [shared collector](../README.md). It reads only the explicitly selected Codex home; it never falls back to `$CODEX_HOME`/`~/.codex` by itself, never reads credentials, `auth.json`, SQLite state or config, makes no network calls, and never modifies rollouts. Runtime: Node.js 26 or newer with native TypeScript stripping and built-in `node:zlib` Zstandard.
 
-The original [source plan](PLAN.md) and [accounting analysis](../../docs/claude-codex-backfill.md) remain historical design documents. This README describes the implemented interface and its evidence limits.
+The original [source plan](PLAN.md) and [accounting analysis](../../docs/claude-codex-backfill.md) remain historical design documents. This README describes the implemented interface, native plugin packaging, and evidence limits.
+
+## Native Codex plugin
+
+This adapter is packaged as a first-class native plugin for OpenAI Codex CLI:
+- **Marketplace Manifest:** `.agents/plugins/marketplace.json` (catalog `tokenmunchers`, plugin `tokenmunchers-codex`, source `{ "source": "local", "path": "." }`).
+- **Plugin Manifest:** `.codex-plugin/plugin.json` (hooks `./plugins/codex/hooks.json`, skills `./plugins/codex/skills`, interface category `Productivity`).
+- **User Skill:** `$tokenmunchers-codex:munch`, defined at `plugins/codex/skills/munch/SKILL.md` with `user-invocable: true` and `policy: { allow_implicit_invocation: false }` in `plugins/codex/skills/munch/agents/openai.yaml` (Codex rejects Claude's `disable-model-invocation` frontmatter; the host app-server discovers and registers plugin skills namespaced by plugin ID as `tokenmunchers-codex:munch`). Procedural skill instructions prohibit autonomous execution or inferred consent, and runtime CLI flags require explicit human approval for uploads. Codex tool execution subshells (`exec_command`) may filter environment variables matching `*KEY*` or `*TOKEN*`; when tool filtering prevents access to `TOKENMUNCHERS_API_KEY`, users should execute manual `sync` in their launch terminal outside Codex or enable recurring hooks (`$tokenmunchers-codex:munch auto-on --confirm-upload`), which execute with host terminal environment inheritance.
+- **Lifecycle Hooks & Teardown Override:** `SessionStart` and `SessionEnd` hooks in `plugins/codex/hooks.json` execute `node "${CLAUDE_PLUGIN_ROOT}/integrations/plugin/src/cli.ts" hook --source codex`. `SessionStart` runs detached in the background (`async: true`). However, during session teardown, Codex CLI 0.154.0 applies a synchronous host override to `SessionEnd` (`running async SessionEnd hook synchronously`), waiting up to the configured hook timeout (`timeout: 10` on `SessionEnd`). Active model generation turns are never blocked; if shutdown interrupts delivery or the network times out, the uncommitted snapshot and acknowledged request metadata are retained locally in SQLite (never committed remotely when incomplete), and actual upload resumes on the next opted-in lifecycle hook (`SessionStart` or `SessionEnd`) or explicitly confirmed manual sync (`$tokenmunchers-codex:munch sync`). (`$tokenmunchers-codex:munch preview` scans locally only and does not trigger network delivery).
+- **Transcript Flush Semantics:** Codex CLI 0.154.0 flushes session transcripts and turn usage to disk before `SessionEnd` hooks fire. If an unexpected crash races with or prevents the final flush before exit, subsequent `SessionStart`, `$tokenmunchers-codex:munch preview`, or manual `$tokenmunchers-codex:munch sync` scans accessible flushed logs on disk (usage never written to disk by the harness or lost before writing cannot be recovered).
+- **Stdin Voiding:** Codex pipes session turns to hook stdin. The hook runner immediately drains and ignores stdin without parsing, ensuring prompt and transcript privacy (local files on disk are scanned for allowlisted metadata only—never prompt, response, or code text).
+- **Process Serialization:** An atomic SQLite process lock (`<state>/codex.lock.sqlite`) serializes hook executions; busy hooks skip cleanly, and subsequent hooks or manual sync scan accessible flushed disk logs.
+
+### Safe staging and installation
+
+Codex CLI registers the local marketplace source directory and recursively copies files into its cache (`~/.codex/plugins/cache/tokenmunchers/tokenmunchers-codex/<version>/`). Running `marketplace add .` directly against a working repository would copy uncommitted development files, secrets (`.env`), and `node_modules`.
+
+Always stage clean plugin artifacts first using `integrations/package-plugin.ts`:
+
+```sh
+# 1. Stage clean plugin artifacts into an explicit empty directory
+export PLUGIN_DIR="$HOME/.local/share/tokenmunchers/plugin"
+mkdir -p "$PLUGIN_DIR"
+node integrations/package-plugin.ts --output "$PLUGIN_DIR"
+
+# 2. Register local marketplace (source must be a directory containing .agents/plugins/marketplace.json)
+codex plugin marketplace add "$PLUGIN_DIR" --json
+
+# 3. Add the plugin (subcommand is 'add', NOT 'install')
+codex plugin add tokenmunchers-codex@tokenmunchers --json
+```
+
+*Important:* The staging helper requires `--output` to name an explicit directory that is empty or does not yet exist (it refuses existing non-empty directories to guarantee clean packaging). Keep `$PLUGIN_DIR` intact on disk as long as the local marketplace remains registered in Codex. Only remove `$PLUGIN_DIR` after removing the marketplace registration (`codex plugin marketplace remove tokenmunchers`).
+
+*(Codex verifies hook hashes; accept the interactive trust prompt in the terminal. Do not advise `--dangerously-bypass-hook-trust` in normal workflows).*
+Once installed in the Codex plugin cache, the plugin runs completely self-contained and has zero runtime dependence on the original checkout directory.
+
+### Plugin commands & execution routes
+
+Operations can be performed in Codex via the `$tokenmunchers-codex:munch` skill (the host app-server registers the skill namespaced as `tokenmunchers-codex:munch`; plain `$munch` is not registered), or directly via the installed plugin runtime CLI:
+
+```sh
+# Direct execution via installed plugin cache (or from repo root via integrations/plugin/src/cli.ts):
+CODEX_CACHE="${CODEX_HOME:-$HOME/.codex}/plugins/cache/tokenmunchers/tokenmunchers-codex/0.1.0"
+node "$CODEX_CACHE/integrations/plugin/src/cli.ts" <COMMAND> --source codex [OPTIONS]
+```
+
+*(Note: The canonical skill invocation is `$tokenmunchers-codex:munch <command>`, which injects runtime instructions in both interactive sessions and `codex exec`. Direct CLI invocation remains available for standalone scripting or headless pipelines).*
+- **`activate --root "$HOME/.codex/sessions" [--exclude <prefix>]`**: Initializes local ledger state with an explicit directory. No data is uploaded.
+- **`preview`**: Runs a local scan using this rollout adapter and displays a compact metadata-only summary without uploading (fields with missing or unverified coverage, like unpriced `cost_usd`, report as `null`, avoiding known-subtotal mislabelling; genuine complete counts remain numeric 0). Never triggers network delivery.
+- **`status`**: Inspects current state and consent without scanning.
+- **`sync`**: Scans for new usage first, then uploads a contribution snapshot with explicit user confirmation (`--confirm-upload`). Requires `TOKENMUNCHERS_API_KEY` exported in the environment.
+- **`auto-on`**: Enables recurring background uploads on `SessionStart` and `SessionEnd` lifecycle hooks (requires `--confirm-upload`).
+- **`auto-off`**: Disables recurring background uploads without resetting device identity or cutoff.
+- **`pause` / `resume`**: Pauses or resumes tracking for `codex`. Observations timestamped during pause windows are permanently excluded.
 
 ## Interface and discovery
 
@@ -87,3 +141,6 @@ Open limits:
 - Only Codex CLI 0.154.0 modern rollouts were captured, on one machine and one provider/model. No real legacy-only, mixed legacy/modern, compacted, cache-write, reasoning or `.zst` rollout has been captured; those paths are synthetic/source-derived only.
 - The real child evidence is one depth-1 spawn with one response. Its existence is proven by the on-disk rollout; the parent's exec stdout showed only a collab wait with empty `receiver_thread_ids`. Complete child coverage, nested spawns and inherited modern records below the boundary are unverified against real data.
 - Rollouts record observed completed responses with usage, not billing. Responses Codex never recorded cannot be recovered; exact usage across all historical sessions is not claimed.
+
+### Parent verification observations
+Parent smoke testing verified native Codex CLI 0.154.0 plugin installation (`tokenmunchers-codex@tokenmunchers`) and lifecycle hook cycles using local mock providers and fixture metadata in an isolated sandbox, observing `running async SessionEnd hook synchronously` with hook scan count increasing 2 -> 3, shutdown bounded by the 10-second hook timeout, and zero default network uploads. This confirms harness lifecycle integration without expanding real-rollout or provider evidence beyond the cataloged 0.154.0 captures.

@@ -10,5 +10,5 @@
     "erasableSyntaxOnly": true,
     "types": ["node"]
   },
-  "include": ["shared/**/*.ts", "collector/**/*.ts", "claude-code/**/*.ts", "codex/**/*.ts"]
+  "include": ["shared/**/*.ts", "collector/**/*.ts", "claude-code/**/*.ts", "codex/**/*.ts", "plugin/**/*.ts"]
 }

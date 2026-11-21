@@ -1,0 +1,20 @@
+{
+  "name": "tokenmunchers-codex",
+  "version": "0.1.0",
+  "description": "Tokenmunchers metadata-only accounting collector for Codex",
+  "author": {
+    "name": "Tokenmunchers"
+  },
+  "license": "MIT",
+  "skills": "./plugins/codex/skills",
+  "hooks": "./plugins/codex/hooks.json",
+  "interface": {
+    "displayName": "Tokenmunchers Codex",
+    "shortDescription": "metadata-only accounting",
+    "developerName": "Tokenmunchers",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ]
+  }
+}
