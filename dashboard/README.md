@@ -6,7 +6,7 @@ The web front end for [tokenmunchers](../README.md), live at **[tokenmunchers.ta
 
 | Route | Description |
 | --- | --- |
-| `/` | Leaderboard (Today / This week / All time; tokens or cost; with or without subagent calls), "Live now", the activity feed, and group tokens per day |
+| `/` | Leaderboard (Today / Week / All time; tokens or cost; with or without subagent calls) with a per-member token sparkline for the selected period, "Live now", the activity feed, and group tokens per day |
 | `/u/[handle]` | Member profile: totals, streaks, biggest day, tokens per day, model mix, recent calls |
 | `/settings` | Profile, API keys, setup instructions for OMP and munch, account deletion |
 | `/login` | GitHub / Discord sign-in |
@@ -28,6 +28,8 @@ All reads run as the signed-in user, with row-level security (RLS) applied. The 
 | Live updates | Supabase Realtime for call events and presence; an aggregate refresh every 30 seconds |
 
 The database is documented in the [Supabase README](../supabase/README.md).
+
+The leaderboard's period picker selects what each column shows and also drives every member's sparkline: **Today** is the current UTC day, **Week** is the latest seven UTC dates including today, and **All time** spans all available history. The leaderboard total for the selected period uses the same cutoff as its sparkline — for example, the Week total covers the same seven UTC days. The separate group tokens-per-day chart always shows the last 30 UTC days, independent of the selected leaderboard period.
 
 ## Claude Code and Codex
 

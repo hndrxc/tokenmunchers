@@ -51,6 +51,9 @@ export function Dashboard(props: DashboardProps) {
 
   const profilesRef = useRef(profiles);
   profilesRef.current = profiles;
+  // First UTC day of the rolling 7-day leaderboard window; realtime inserts older
+  // than this must not nudge the week totals (matches the server cutoff).
+  const weekCutoff = props.days[props.days.length - 7] ?? "";
 
   // Clock for relative times and presence expiry; reload at UTC midnight so
   // "today" and the 30-day window re-base.
@@ -84,9 +87,10 @@ export function Dashboard(props: DashboardProps) {
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "usage_events" }, (payload) => {
           const e = normalizeEvent(payload.new);
           void ensureProfile(e.user_id);
-          setWeek((m) => addEvent(m, e));
+          const day = utcDay(Date.parse(e.ts));
+          if (day >= weekCutoff) setWeek((m) => addEvent(m, e));
           setAllTime((m) => addEvent(m, e));
-          if (utcDay(Date.parse(e.ts)) === props.todayKey) setToday((m) => addEvent(m, e));
+          if (day === props.todayKey) setToday((m) => addEvent(m, e));
           setFeed((f) => (f.some((x) => x.event_id === e.event_id) ? f : [e, ...f].slice(0, FEED_LIMIT)));
           setFresh((s) => new Set(s).add(e.event_id));
           setNow(Date.now());
@@ -115,7 +119,7 @@ export function Dashboard(props: DashboardProps) {
           if (s !== "SUBSCRIBED") setStatus(s.toLowerCase());
         }),
     );
-  }, [ensureProfile, props.todayKey]);
+  }, [ensureProfile, props.todayKey, weekCutoff]);
 
   // ---- derived ----------------------------------------------------------------
 
@@ -151,6 +155,20 @@ export function Dashboard(props: DashboardProps) {
     () => props.days.map((day) => ({ day, value: Object.values(daily).reduce<number | null>((s, u) => addNullable(s, Object.hasOwn(u, day) ? u[day] : 0), 0) })),
     [daily, props.days],
   );
+  const weekDays = useMemo(() => props.days.slice(-7), [props.days]);
+  const allDays = useMemo(() => {
+    let earliest: string | null = null;
+    for (const r of props.daily) {
+      if (!earliest || r.day < earliest) earliest = r.day;
+    }
+    if (!earliest || earliest > props.todayKey) return [props.todayKey];
+    const end = Date.parse(`${props.todayKey}T00:00:00.000Z`);
+    const days: string[] = [];
+    for (let t = Date.parse(`${earliest}T00:00:00.000Z`); t <= end; t += 86_400_000) {
+      days.push(new Date(t).toISOString().slice(0, 10));
+    }
+    return days;
+  }, [props.daily, props.todayKey]);
 
   const periodLabel = period === "today" ? "today (UTC)" : period === "week" ? "last 7 days" : "all time";
   const groupTotal = rows.reduce<number | null>((s, r) => addNullable(s, r.value), 0);
@@ -239,7 +257,7 @@ export function Dashboard(props: DashboardProps) {
                 <tr>
                   <th className="rank">#</th>
                   <th>Who</th>
-                  <th className="spark-cell">Last 30 days</th>
+                  <th className="spark-cell">{period === "today" ? "Today" : period === "week" ? "Last 7 days" : "All time"}</th>
                   <th className="num calls">Calls</th>
                   <th className="num">{metric === "tokens" ? "Tokens" : "Cost"}</th>
                 </tr>
@@ -256,7 +274,18 @@ export function Dashboard(props: DashboardProps) {
                       </span>
                     </td>
                     <td className="spark-cell">
-                      <Sparkline days={props.days} values={daily[p.id] ?? {}} label={p.display_name} />
+                      <Sparkline
+                        days={
+                          period === "today"
+                            ? [props.todayKey]
+                            : period === "week"
+                              ? weekDays
+                              : allDays
+                        }
+                        values={daily[p.id] ?? {}}
+                        label={p.display_name}
+                        period={period}
+                      />
                     </td>
                     <td className="num calls sub">{t ? t.call_count === null ? "Unknown" : t.call_count.toLocaleString("en-US") : 0}</td>
                     <td className="num">

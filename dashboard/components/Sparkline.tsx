@@ -1,14 +1,37 @@
 import { dayLabel, tokens } from "@/lib/format";
 
-/** 30 tiny daily bars; native <title> tooltips per bar. Single series, no legend. */
-export function Sparkline({ days, values, label }: { days: string[]; values: Record<string, number | null>; label: string }) {
+/** Tiny daily bars; native <title> tooltips per bar. Single series, no legend. */
+export type SparkPeriod = "today" | "week" | "all";
+
+export function Sparkline({
+  days,
+  values,
+  label,
+  period,
+}: {
+  days: string[];
+  values: Record<string, number | null>;
+  label: string;
+  period?: SparkPeriod;
+}) {
   const w = 120;
   const h = 26;
-  const gap = 1;
+  // Drop the inter-bar gap once the range gets long so widths stay positive.
+  const gap = days.length > 120 ? 0 : 1;
   const bw = (w - gap * (days.length - 1)) / days.length;
-  const max = Math.max(1, ...days.map((d) => values[d] ?? 0));
+  let max = 1;
+  for (const d of days) {
+    const v = values[d] ?? 0;
+    if (v > max) max = v;
+  }
+  const desc =
+    period === "today"
+      ? `${label}: tokens today`
+      : period === "all"
+        ? `${label}: daily tokens, all time (${days.length} days)`
+        : `${label}: daily tokens, last ${days.length} days`;
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} role="img" aria-label={`${label}: daily tokens, last ${days.length} days`}>
+    <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} role="img" aria-label={desc}>
       <line x1={0} x2={w} y1={h - 0.5} y2={h - 0.5} stroke="var(--grid)" strokeWidth={1} />
       {days.map((d, i) => {
         const v = Object.hasOwn(values, d) ? values[d] : 0;
