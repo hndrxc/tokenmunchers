@@ -1,5 +1,7 @@
 # Claude Code & Codex CLI Backfill and Historical Accounting
 
+*Note: the native Claude Code and Codex plugins and the collector (`integrations/`) were removed. Those tools are now reported through `munch`. Paths to `integrations/` below refer to removed code.*
+
 **Date:** 2026-10-27 | **Scope:** Design review for Claude Code and OpenAI Codex CLI in `tokenmunchers`  
 **Sources:** Upstream repositories and packages at pinned commits. No application code changes.  
 - **Claude Code:** Embedded commit `f375cd85d4f7` inside [`@anthropic-ai/claude-agent-sdk@0.3.312`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) (`manifest.json`), [Monitoring Docs](https://code.claude.com/docs/en/monitoring-usage), [Sessions Docs](https://code.claude.com/docs/en/sessions), [Cost Tracking Docs](https://code.claude.com/docs/en/agent-sdk/cost-tracking). Note: Transcript schema is internal and version-specific without public SLA.  

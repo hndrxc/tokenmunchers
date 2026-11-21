@@ -10,7 +10,7 @@ Production project: `tokenmunchers` (`fywgkzqgtitpwijweojk`, us-east-2).
 OMP plugin ──POST /functions/v1/ingest──▶ ingest  ──rpc ingest()─────────▶ Postgres ──Realtime──▶ dashboard
            ──POST /functions/v1/history─▶ history ──rpc ingest_history()──┘   │
 munch ─────POST /functions/v1/ingest──────┘                                    ├─ pg_cron: rollups, retention, presence
-Claude/Codex collectors ──POST /functions/v1/contributions─▶ contributions ──rpc publish_contributions()─┘
+(earlier Claude Code/Codex uploads; no current client) ──POST /functions/v1/contributions─▶ contributions ──rpc publish_contributions()─┘
 ```
 
 - The Edge Functions check every field of a request against an allowlist and hash the API key. They then call `security definer` functions with the secret key. No client role can write usage data.
@@ -96,7 +96,7 @@ A row has `day`, `provider`, `model`, `is_subagent`, `call_count`, the four toke
 
 ### `POST /functions/v1/contributions`
 
-For the standalone [Claude Code/Codex collector](../integrations/README.md), not the OMP plugin. Deploy the migrations and function before activating a collector. Create an API key in dashboard Settings, preview explicitly selected source roots locally, then follow the collector's confirmation flow. Do not upload these observations through OMP `ingest` or `history`.
+The collector that used to upload Claude Code and Codex usage through this endpoint no longer exists, and no client currently posts to it. The endpoint and protocol remain for usage that was already uploaded (it stays counted in the views) and for possible future use. Claude Code and Codex are now reported live through `munch` and `ingest`. Deploy the migrations and function with the rest of the backend, because the views depend on them.
 
 Each request includes `device_id` (stable source-isolated UUID), `harness` (`claude-code` or `codex`) and `snapshot_id` (UUID retained across exact retries). The first begin registers an immutable source cutoff and harness; another cutoff/harness for that device returns `409 cutoff_conflict`.
 
@@ -142,21 +142,19 @@ The permanent smoke harness executes every real migration and exercises staged R
 
 #### Scenario-to-regression map
 
-These are available checks, not claims that any gate has run. Source-specific fixture provenance and detailed parser scenarios remain documented in each integration README and fixture manifest.
+These are available checks, not claims that any gate has run.
 
 | Accepted scenario | Behavioral coverage |
 | --- | --- |
-| Reimport/replay; genuinely new child work versus copied prefixes | `integrations/shared/test/accounting.test.ts`, both source adapter suites; SQL smoke replay/ownership |
-| Source cleanup and collector restarts | Shared ledger and delivery suites; SQL smoke empty snapshot and late replay |
-| Incomplete line, interrupted bounded scan or process exit | `integrations/collector/test/collector.test.ts`, source reader/adapter suites, shared accounting process-termination case |
-| Original timestamp, delayed pre-cutoff flush and old live recovery | Shared partition tests; SQL smoke cutoff equality, since-query and straddling rejection |
-| Independent persistent pause and exclusions | Shared accounting pause/restart case, source discovery suites, shared delivery guard cases |
-| Unknown output/provider/cost/calls, estimates, subagents and reconstruction | Validator suite; SQL nullable/quality/attribution cases; `dashboard/test/accounting.test.mjs`; `discord-bot/src/leaderboard.test.ts` |
-| Legacy/modern transition, counter reset/overflow and compressed archives | `integrations/codex/test/accounting.test.ts` and `reader.test.ts`; SQL permanent interval retirement |
-| Historical snapshot spans multiple requests or loses acknowledgments | `integrations/shared/test/delivery.test.ts`; SQL incomplete snapshot, changed chunk, duplicate identity and stale commit cases |
-| Large snapshot exceeds one rate window | Validator suite `Retry-After` response contract; SQL smoke 59-chunk burst with reset-timed commit resume; shared delivery rate-wait cases |
-| Archive copied to another installation | Shared delivery ownership failure; SQL accepted and never-uploaded-retired identity ownership cases |
-| Claude final output and real-session reconciliation | Requires authenticated real Claude evidence; synthetic fixtures cannot establish final output. Real Codex fixture provenance is recorded separately, not inferred from cumulative stdout. |
+| Reimport/replay; genuinely new child work versus copied prefixes | SQL smoke replay/ownership |
+| Source cleanup and re-delivery | SQL smoke empty snapshot and late replay |
+| Original timestamp, delayed pre-cutoff flush and old live recovery | SQL smoke cutoff equality, since-query and straddling rejection |
+| Unknown output/provider/cost/calls, estimates, subagents and reconstruction | `supabase/test/contributions-validation.test.mjs`; SQL nullable/quality/attribution cases; `dashboard/test/accounting.test.mjs`; `discord-bot/src/leaderboard.test.ts` |
+| Legacy/modern transition, counter reset/overflow | SQL smoke permanent interval retirement |
+| Historical snapshot spans multiple requests or loses acknowledgments | SQL smoke incomplete snapshot, changed chunk, duplicate identity and stale commit cases |
+| Large snapshot exceeds one rate window | `supabase/test/contributions-validation.test.mjs` `Retry-After` response contract; SQL smoke 59-chunk burst with reset-timed commit resume |
+| Archive copied to another installation | SQL smoke accepted and never-uploaded-retired identity ownership cases |
+| Real-session reconciliation of final output | Requires authenticated real evidence; synthetic fixtures cannot establish final output |
 | UI presentation and deployed transport | Actual dashboard browser smoke with clearly synthetic metadata; hosted authenticated endpoint/database/Realtime gates remain separate from the local SQL harness |
 
 

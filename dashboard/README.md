@@ -8,7 +8,7 @@ The web front end for [tokenmunchers](../README.md), live at **[tokenmunchers.ta
 | --- | --- |
 | `/` | Leaderboard (Today / This week / All time; tokens or cost; with or without subagent calls), "Live now", the activity feed, and group tokens per day |
 | `/u/[handle]` | Member profile: totals, streaks, biggest day, tokens per day, model mix, recent calls |
-| `/settings` | Profile, API keys, plugin setup instructions, account deletion |
+| `/settings` | Profile, API keys, setup instructions for OMP and munch, account deletion |
 | `/login` | GitHub / Discord sign-in |
 | `/auth/callback`, `/auth/signout` | Supabase auth handlers |
 
@@ -20,24 +20,24 @@ All reads run as the signed-in user, with row-level security (RLS) applied. The 
 
 | Data | Source |
 | --- | --- |
-| Today / this week totals | `leaderboard_since(timestamptz)`, over OMP raw events plus canonical collector contributions |
-| All-time totals | `leaderboard_all_time()`: OMP imported history, past daily totals and today's raw events, plus collector contributions once |
-| Charts, streaks, model mix | `usage_daily_all` view (OMP daily totals + imported history + published collector contributions) |
+| Today / this week totals | `leaderboard_since(timestamptz)`, over raw call events plus earlier Claude Code/Codex contributions |
+| All-time totals | `leaderboard_all_time()`: imported history, past daily totals and today's raw events, plus earlier Claude Code/Codex contributions once |
+| Charts, streaks, model mix | `usage_daily_all` view (daily totals + imported history + earlier Claude Code/Codex contributions) |
 | Activity feed, recent calls | `usage_events` |
 | Live now | `live_sessions` (a heartbeat in the last 90 s) |
-| Live updates | Supabase Realtime for OMP events/presence; aggregate refresh every 30 seconds also picks up atomic collector publications |
+| Live updates | Supabase Realtime for call events and presence; an aggregate refresh every 30 seconds |
 
 The database is documented in the [Supabase README](../supabase/README.md).
 
-## Claude Code and Codex onboarding
+## Claude Code and Codex
 
-Deploy both collector migrations and the `contributions` Edge Function first; see the [backend protocol and deployment instructions](../supabase/README.md#post-functionsv1contributions). In Settings, create a source-labeled API key. Follow the [standalone collector README](../integrations/README.md) to select only intended source roots, preview accounting coverage/exclusions, confirm historical publication and activate incremental collection. OMP keeps its existing `/munch` commands and identities; it does not ingest Claude/Codex observations.
+Claude Code and Codex are reported live by [munch](../proxy/README.md), the same way as other tools, so their calls appear in the activity feed and under Live now. Settings has the setup steps. Importing Claude Code/Codex history from disk isn't available at the moment.
+
+Usage that the former Claude Code/Codex collector already uploaded stays counted in the leaderboards and charts, and nothing new arrives through that path. The views depend on the `collector_contributions` tables, so deploy both collector migrations and the `contributions` Edge Function with the rest of the backend; see the [backend notes](../supabase/README.md#post-functionsv1contributions).
 
 Unavailable output, calls or USD are shown as **Unknown**, never zero, and unavailable leaderboard metrics are unranked. Null is absorbing in group totals, daily charts and model mix. Unknown chart days have `?` markers (and explicit table values); muted sparkline bars indicate unavailable days, not measured usage. Cost estimates and reconstructed usage are labeled; neither reconstructed intervals nor session summaries become invented calls. A day with recorded usage can establish activity even when its total is unavailable; “Biggest day” remains unknown if any daily total is unavailable.
 
-Collector totals do not manufacture live presence or OMP activity-feed entries. Those sections explicitly describe OMP calls. Strong canonical IDs are owned once per user/harness across devices; copied archives with conflicting owners require resolution rather than changing IDs. Weak archive identities require a single source owner. Previously accepted contributions survive source cleanup and interrupted/replayed snapshot publication. Source logs are not complete billing ledgers; the collector preview reports skipped/uncertain coverage.
-
-Totals change only when a snapshot commits. A large first import shares the API key's per-minute request budget with the OMP plugin, so the collector waits for the server's `Retry-After` reset and resumes where it stopped. Expect such an import to take several minutes before the dashboard shows it, all at once.
+Earlier contributions don't create live presence or activity-feed entries. Strong canonical IDs are owned once per user/harness across devices, and previously accepted contributions survive source cleanup. Source logs were not complete billing ledgers.
 
 
 ## Local development

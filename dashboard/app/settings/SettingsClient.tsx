@@ -97,18 +97,37 @@ export function SettingsClient({ profile, keys }: { profile: Profile; keys: ApiK
 
       <section className="card">
         <div className="card-head">
-          <h2>Connect Claude Code or Codex</h2>
+          <h2>Connect Claude Code, Codex and other tools</h2>
         </div>
-        <p>
-          Use the separate standalone collector in the repository&apos;s <code>integrations/README.md</code>.
-          Create a source-labeled API key below, select explicit transcript roots, preview coverage and exclusions,
-          then confirm publication. Each source has independent pause state and an immutable activation cutoff.
+        <p style={{ marginTop: 0 }}>
+          <code>munch</code> is a small local program that reports Claude Code, Codex and other AI tools.
         </p>
-        <p className="sub">
-          Only normalized accounting metadata is uploaded, never transcript content or paths.
-          Unknown output, calls and cost stay unknown; estimates and reconstructed usage are labeled.
-          Accepted usage survives source cleanup. Copied archives must retain a single owner; do not change IDs to bypass ownership conflicts.
-          Collector totals refresh periodically; live presence and the activity feed remain OMP-only.
+        <ol style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 10 }}>
+          <li>
+            Build it (needs Go):
+            <pre>
+              git clone https://github.com/hndrxc/tokenmunchers{"\n"}
+              cd tokenmunchers/proxy{"\n"}
+              go build -o ~/.local/bin/munch ./cmd/munch
+            </pre>
+          </li>
+          <li>Create an API key below. It is shown once.</li>
+          <li>
+            Run <code>munch install</code>. It asks for the API key, starts the background service, sets up your shell, and offers
+            the OMP plugin when OMP is installed.
+          </li>
+          <li>
+            Open a new terminal. <code>munch status</code> shows queue and connection state; <code>munch pause</code> stops
+            reporting for private or client work.
+          </li>
+        </ol>
+        <p className="sub" style={{ marginBottom: 0 }}>
+          Only metadata is sent: provider, model, token counts, cost and timestamps. Prompts, responses and your provider
+          credentials go only to the provider. More in the{" "}
+          <a href="https://github.com/hndrxc/tokenmunchers/blob/main/proxy/README.md" target="_blank" rel="noreferrer">
+            munch README
+          </a>
+          .
         </p>
       </section>
 

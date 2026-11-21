@@ -133,7 +133,7 @@ munch exec -- codex
 | `openrouter` | `https://openrouter.ai` | OpenAI-compatible + `usage.cost` | `OPENROUTER_BASE_URL` (includes `/api/v1`) |
 | `ollama` | `http://127.0.0.1:11434` | Ollama native NDJSON + OpenAI-compatible | `OLLAMA_HOST` (not given to `omp`; see below) |
 
-> **Avoiding double counting:** If you route **Claude Code** or **Codex** through `munch`, pause or disable the corresponding native collector for that tool so the same call isn't reported twice. **OMP** is handled for you; see below.
+> **Avoiding double counting:** OMP has its own plugin (omp-tm), so `munch install` keeps OMP out of the proxy by default and the same call isn't reported twice. See below.
 
 ### Oh My Pi (omp-tm)
 

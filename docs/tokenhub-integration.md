@@ -1,5 +1,7 @@
 # TokenHub integration exploration
 
+*Note: the native Claude Code and Codex plugins and the collector (`integrations/`) were removed. Those tools are now reported through `munch`. Paths to `integrations/` below refer to removed code.*
+
 **Date:** 2026-11-19 | **Status:** research only; every design below is a **proposal**. No application code, schema, or dependency was changed.
 
 **Question:** how could TokenMunchers (this repo) integrate with [`thecandylane/tokenhub`](https://github.com/thecandylane/tokenhub)?

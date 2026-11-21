@@ -291,10 +291,10 @@ export function Dashboard(props: DashboardProps) {
         <section className="card" aria-labelledby="feed-h">
           <div className="card-head">
             <h2 id="feed-h">Activity</h2>
-            <span className="sub">OMP calls, as they land; collector totals refresh periodically</span>
+            <span className="sub">Calls as they land</span>
           </div>
           {feed.length === 0 ? (
-            <p className="empty">No calls yet. Install the OMP plugin from Settings.</p>
+            <p className="empty">No calls yet. Set up OMP or munch from Settings.</p>
           ) : (
             <ul className="feed" aria-live="polite">
               {feed.map((e) => {

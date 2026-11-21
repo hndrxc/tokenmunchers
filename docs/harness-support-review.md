@@ -1,5 +1,7 @@
 # Coding harness support review
 
+*Note: the native Claude Code and Codex plugins and the collector (`integrations/`) were removed. Those tools are now reported through `munch`. Paths to `integrations/` below refer to removed code.*
+
 Checked: 2026-10-24. Scope: repository review and integration research; no application implementation changes. Upstream `main`/`dev` links describe inspected source, not a tested minimum release.
 
 **Backfill follow-up:** Current scope is Claude Code and Codex only. The [focused backfill analysis](claude-codex-backfill.md) supersedes the telemetry-first recommendation below when historical imports are required: prefer shared local parsing with explicit accounting-quality limits. Claude historical output completeness and legacy Codex reconstruction remain validation gates.
