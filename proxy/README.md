@@ -15,10 +15,28 @@
 
 ## Build & Install
 
+### Install a release
+
+From [GitHub Releases](https://github.com/hndrxc/tokenmunchers/releases), pick a `munch-v*` release and download its archive and `SHA256SUMS` into the same directory. Match your OS (`linux` or `darwin` for macOS) and CPU (`amd64` for x86-64 or `arm64` for ARM64, including Apple silicon). Go is not required.
+
+Set `archive` to the downloaded filename, then verify the checksum before installing:
+
+```bash
+archive=munch-0.1.0-darwin-arm64.tar.gz
+grep -F "  $archive" SHA256SUMS | shasum -a 256 -c &&
+  mkdir -p ~/.local/bin &&
+  tar -xzf "$archive" -C ~/.local/bin munch
+```
+
+Put `~/.local/bin` on your `PATH`, then run `munch --version` and `munch install`.
+
+### Build from source
+
 Requires Go 1.24+.
 
 ```bash
 cd proxy
+mkdir -p ~/.local/bin
 go build -o ~/.local/bin/munch ./cmd/munch
 ```
 
@@ -28,6 +46,21 @@ Cross-compile examples:
 CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -o munch-linux-amd64 ./cmd/munch
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o munch-darwin-arm64 ./cmd/munch
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o munch.exe ./cmd/munch
+```
+
+### Cut a release
+
+Once the GitHub Actions workflow is on `main`, tag the commit you want to ship with `munch-vMAJOR.MINOR.PATCH` and push the tag:
+
+```bash
+git tag munch-v0.1.0
+git push origin munch-v0.1.0
+```
+
+The workflow tests `proxy/`, builds Linux and macOS archives for `amd64` and `arm64`, and publishes them with `SHA256SUMS`. `munch --version` and the usage client's version both use the numeric version from the tag. Untagged source builds default to `0.1.0`. To set a version in a manual build from `proxy/`:
+
+```bash
+go build -ldflags '-X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=0.1.1' ./cmd/munch
 ```
 
 ### Upgrading from tmproxy

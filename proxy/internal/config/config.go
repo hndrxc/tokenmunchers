@@ -16,9 +16,18 @@ import (
 	"strings"
 )
 
+// Version is the munch release version, defaulting to the development version
+// 0.1.0. Release builds override it at link time via
+//   -X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=<version>
+// where the linked version is the full (e.g. "1.4.1") with no "munch-v"
+// prefix.
+var Version = "0.1.0"
+
+// ClientVersion is the ingest client identity reported to the upstream
+// service; it always carries the "tmproxy/" prefix.
+var ClientVersion = "tmproxy/" + Version
+
 const (
-	Version          = "0.1.0"
-	ClientVersion    = "tmproxy/" + Version
 	DefaultListen    = "127.0.0.1:8787"
 	DefaultIngestURL = "https://fywgkzqgtitpwijweojk.supabase.co/functions/v1/ingest"
 )

@@ -1,0 +1,108 @@
+name: munch
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "munch-v*"
+
+jobs:
+  test:
+    name: Test and compile
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: proxy/go.mod
+          cache: false
+
+      - name: Run proxy tests
+        working-directory: proxy
+        run: go test ./...
+
+      - name: Compile munch CLI
+        working-directory: proxy
+        run: go build -o "$RUNNER_TEMP/munch" ./cmd/munch
+
+  build:
+    name: Build release archives
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/munch-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: proxy/go.mod
+          cache: false
+
+      - name: Validate release tag format
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^munch-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "error: invalid release tag '${GITHUB_REF_NAME}'; expected munch-vMAJOR.MINOR.PATCH with no leading zeros" >&2
+            exit 1
+          fi
+          echo "VERSION=${GITHUB_REF_NAME#munch-v}" >> "$GITHUB_ENV"
+
+      - name: Build cross-target archives and checksums
+        working-directory: proxy
+        run: |
+          set -euo pipefail
+          dist="$RUNNER_TEMP/munch-release"
+          mkdir -p "$dist"
+          for goos in linux darwin; do
+            for goarch in amd64 arm64; do
+              archive="$dist/munch-${VERSION}-${goos}-${goarch}.tar.gz"
+              GOOS="${goos}" GOARCH="${goarch}" CGO_ENABLED=0 \
+                go build -trimpath \
+                  -ldflags="-s -w -X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=${VERSION}" \
+                  -o "$dist/munch" ./cmd/munch
+              tar -C "$dist" -czf "$archive" munch
+            done
+          done
+          rm "$dist/munch"
+          ( cd "$dist" && sha256sum munch-*.tar.gz > SHA256SUMS )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: munch-release-assets
+          path: ${{ runner.temp }}/munch-release/
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/munch-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: munch-release-assets
+          path: dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/munch-*.tar.gz dist/SHA256SUMS \
+            --verify-tag \
+            --generate-notes
