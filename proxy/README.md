@@ -17,18 +17,18 @@
 
 ### Install a release
 
-From [GitHub Releases](https://github.com/hndrxc/tokenmunchers/releases), pick a `munch-v*` release and download its archive and `SHA256SUMS` into the same directory. Match your OS (`linux` or `darwin` for macOS) and CPU (`amd64` for x86-64 or `arm64` for ARM64, including Apple silicon). Go is not required.
-
-Set `archive` to the downloaded filename, then verify the checksum before installing:
+Download and run the installer on Linux or macOS (`amd64` or `arm64`):
 
 ```bash
-archive=munch-0.1.0-darwin-arm64.tar.gz
-grep -F "  $archive" SHA256SUMS | shasum -a 256 -c &&
-  mkdir -p ~/.local/bin &&
-  tar -xzf "$archive" -C ~/.local/bin munch
+curl -fsSL https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.sh -o install-munch.sh &&
+  sh install-munch.sh
 ```
 
-Put `~/.local/bin` on your `PATH`, then run `munch --version` and `munch install`.
+The script finds the latest stable `munch-v*` release, verifies the archive against `SHA256SUMS`, and installs `munch` in `~/.local/bin`. It requires `curl`, `python3`, `tar`, and either `sha256sum` or `shasum`, but not Go or `sudo`. To use a different directory, run `MUNCH_INSTALL_DIR=/path/to/bin sh install-munch.sh`.
+
+Put that directory on your `PATH`, then run `munch --version` and `munch install`. Re-running the script updates the binary without editing your configuration or restarting the daemon. If the daemon is already running, restart it with `munch restart` to load the new binary.
+
+For a manual install, download the archive for your OS (`linux` or `darwin`) and architecture (`amd64` or `arm64`) and `SHA256SUMS` from [GitHub Releases](https://github.com/hndrxc/tokenmunchers/releases). Check the archive against the matching entry before extracting `munch` into a directory on your `PATH`.
 
 ### Build from source
 

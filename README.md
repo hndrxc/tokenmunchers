@@ -59,14 +59,14 @@ If OMP is installed, `munch install` offers to set up the OMP plugin for you, so
 
 `munch` runs in the background. Your AI tools send requests through it; it reads the token counts from the replies and sends only usage metadata to tokenmunchers. It supports Anthropic, OpenAI/ChatGPT/Codex, Gemini, xAI/Grok, OpenRouter and Ollama. The shell setup routes most tools automatically; Codex signed in with ChatGPT needs [one manual step](proxy/README.md#4-codex-chatgpt-sign-in).
 
-Install the [prebuilt Linux or macOS binary](proxy/README.md#install-a-release), or build from source with [Go 1.24 or newer](https://go.dev/dl/):
+On Linux or macOS, download and run the installer. It installs the latest stable Munch binary in `~/.local/bin` and verifies its SHA-256 checksum. No Go or `sudo` required.
 
 ```bash
-git clone https://github.com/hndrxc/tokenmunchers
-cd tokenmunchers/proxy
-mkdir -p ~/.local/bin
-go build -o ~/.local/bin/munch ./cmd/munch
+curl -fsSL https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.sh -o install-munch.sh &&
+  sh install-munch.sh
 ```
+
+See [install options](proxy/README.md#install-a-release) or [build from source](proxy/README.md#build-from-source).
 
 Make sure `~/.local/bin` is on your `PATH`, then run the one-step setup:
 
