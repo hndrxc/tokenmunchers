@@ -136,9 +136,11 @@ Commands:
   stop                 Stop the background proxy daemon
   restart              Restart the background proxy daemon
   install              Set up the background service, and offer to configure OMP, the shell,
-                       and Codex with ChatGPT sign-in (--yes, --no-shell, --no-codex)
+                       Codex with ChatGPT sign-in, and desktop usage collection on Windows
+                       (--yes, --no-shell, --no-codex, --no-desktop)
   update               Replace this binary with the latest stable Munch release
-  uninstall            Stop and remove the service and remove Munch-managed shell and Codex setup
+  uninstall            Stop and remove the service and remove Munch-managed shell, Codex, and Claude
+                       telemetry setup
   status               Show proxy runtime, queue, and service status
   desktop              Configure opt-in first-party desktop usage collection
   pause                Pause reporting (proxied AI traffic continues uninterrupted)
@@ -199,7 +201,7 @@ func newPrompter(in io.Reader, out io.Writer, yes bool) *prompter {
 // apiKey asks for a TokenMunchers API key and checks its format. An empty
 // answer, or EOF, yields errNoKeyEntered.
 func (p *prompter) apiKey() (string, error) {
-	fmt.Fprintln(p.out, "Create an API key in the TokenMunchers dashboard under Settings > API keys.")
+	fmt.Fprintln(p.out, "Create an API key in the TokenMunchers dashboard (https://tokenmunchers.taiisshort.com/settings) under Settings > API keys.")
 	fmt.Fprint(p.out, "Paste your TokenMunchers API key (tm_...; input is visible): ")
 	line, err := p.in.ReadString('\n')
 	if errors.Is(err, io.EOF) {
@@ -443,9 +445,9 @@ var installHealthTimeout = 10 * time.Second
 // errNoKeyAvailable is returned when install has no API key and cannot ask for one.
 var errNoKeyAvailable = errors.New("no API key: run `munch login` (or set TOKENMUNCHERS_KEY), then run `munch install` again")
 
-// cmdInstall sets munch up end to end: API key, background service, health
-// check, the omp-tm choice for Oh My Pi, the shell profile hook, and Codex
-// signed in with ChatGPT.
+// cmdInstall sets munch up end to end: API key, desktop usage opt-ins on
+// Windows, background service, health check, the omp-tm choice for Oh My Pi,
+// the shell profile hook, and Codex signed in with ChatGPT.
 func (a *App) cmdInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
@@ -454,6 +456,7 @@ func (a *App) cmdInstall(args []string) error {
 	yes := fs.Bool("yes", false, "don't prompt; accept the recommended answer to every question")
 	noShell := fs.Bool("no-shell", false, "don't modify shell profiles")
 	noCodex := fs.Bool("no-codex", false, "don't inspect or modify Codex settings")
+	noDesktop := fs.Bool("no-desktop", false, "don't inspect or change desktop collection or Claude settings")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -475,6 +478,14 @@ func (a *App) cmdInstall(args []string) error {
 	if err != nil {
 		return err
 	}
+	cfg.APIKey = key
+	var dt desktopOutcome
+	if !*noDesktop && installDesktopSupported {
+		dt, err = a.installDesktop(p, paths, cfg)
+		if err != nil {
+			return err
+		}
+	}
 	svc, err := a.installService(paths, cfg.ListenAddr, bin)
 	if err != nil {
 		return err
@@ -491,7 +502,7 @@ func (a *App) cmdInstall(args []string) error {
 	if err != nil {
 		return err
 	}
-	a.printInstallSummary(cfg, svc, sh, cx, flags)
+	a.printInstallSummary(cfg, svc, sh, cx, flags, dt)
 	return nil
 }
 
@@ -584,7 +595,8 @@ func (a *App) installService(paths config.Paths, listen, bin string) (serviceOut
 	switch {
 	case err != nil && out.backend == "pidfile":
 		if runtime.GOOS == "windows" {
-			a.stepf("Service", "auto-start is not available: this runs in the background for your Windows login, without administrator rights, a Windows service, or a scheduled task")
+			// Expected: munch runs for this Windows login only. The summary
+			// says to run `munch start` after signing in again.
 			break
 		}
 		a.stepf("Service", "auto-start is not available on this system; munch will run in the background until you stop it or restart")
@@ -769,7 +781,6 @@ type shellOutcome struct {
 func (a *App) installShell(p *prompter, bin string, noShell bool, flags []envFlag) (shellOutcome, error) {
 	var out shellOutcome
 	if runtime.GOOS == "windows" {
-		a.stepf("Shell", "profile not modified; PowerShell execution policy is unchanged")
 		return out, nil
 	}
 	home, homeErr := os.UserHomeDir()
@@ -857,20 +868,17 @@ func shellNote() string {
 
 // printInstallSummary closes the install output with what is active and what
 // is left for the user to do.
-func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shellOutcome, cx codexOutcome, flags []envFlag) {
+func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shellOutcome, cx codexOutcome, flags []envFlag, dt desktopOutcome) {
+	if runtime.GOOS == "windows" {
+		a.printWindowsInstallSummary(cfg, svc, cx, dt, flags)
+		return
+	}
 	fmt.Fprintf(a.Stdout, "\nmunch is running on http://%s (%s).\n", cfg.ListenAddr, svc.backend)
-	windows := runtime.GOOS == "windows"
 	kind := detectShell()
-	args := shellEnvArgs(kind, flags)
-	if windows && !svc.autoStart {
-		fmt.Fprintf(a.Stdout, "The background daemon stops at Windows logout or reboot. Run `munch start%s` after logging in again.\n", args)
-	} else if !svc.autoStart {
+	if !svc.autoStart {
 		fmt.Fprintln(a.Stdout, "It does not start by itself after a reboot or logout; run `munch start` then.")
 	}
-	if windows {
-		fmt.Fprintf(a.Stdout, "\nTo route supported tools launched from this PowerShell session, run:\n\n  %s\n\n", envHookLine(kind, flags))
-		fmt.Fprintf(a.Stdout, "Or route just one Claude Code launch, without changing this shell's environment:\n\n  munch exec%s -- claude\n\n", args)
-	} else if sh.wired != "" {
+	if sh.wired != "" {
 		fmt.Fprintf(a.Stdout, "New shells route Claude Code, Codex, Gemini and other AI tools through it (set up in %s).\n", sh.wired)
 	} else {
 		where := sh.where
@@ -883,9 +891,7 @@ func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shel
 		fmt.Fprintf(a.Stdout, "To route AI tools through it, add this line to %s:\n\n  %s\n\n", where, envHookLine(kind, flags))
 	}
 	if cfg.OMPViaPlugin {
-		if windows {
-			fmt.Fprintln(a.Stdout, "OMP reports through omp-tm. The PowerShell command above also defines an `omp` function that runs it without the proxy variables to avoid counting calls twice.")
-		} else if sh.wired != "" {
+		if sh.wired != "" {
 			fmt.Fprintln(a.Stdout, "OMP reports through omp-tm, and new shells run `omp` without the proxy variables, so its calls are counted once.")
 		} else {
 			fmt.Fprintln(a.Stdout, "OMP reports through omp-tm, and that line also defines an `omp` function that runs it without the proxy variables, so its calls are counted once.")
@@ -893,26 +899,16 @@ func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shel
 	} else if ompOnPath() {
 		// OMP keeps only host:port of OLLAMA_HOST, so the private route would
 		// be lost and its Ollama discovery would fail against the proxy root.
-		if windows {
-			fmt.Fprintln(a.Stdout, "The PowerShell command above also defines an `omp` function that leaves out OLLAMA_HOST so OMP can talk to local Ollama directly.")
-		} else if sh.wired != "" {
+		if sh.wired != "" {
 			fmt.Fprintln(a.Stdout, "OMP is proxied, but gets no OLLAMA_HOST: it would drop the private route, so it talks to local Ollama directly.")
 		} else {
 			fmt.Fprintln(a.Stdout, "OMP is proxied, but that line also defines an `omp` function that leaves out OLLAMA_HOST: OMP would drop the private route, so it talks to local Ollama directly.")
 		}
 	}
-	switch {
-	case windows && cx.routed != "":
-		fmt.Fprintf(a.Stdout, "Codex signed in with ChatGPT uses the Munch provider in %s, not the PowerShell environment above. Start a new Codex process to pick up the provider setting.\n", cx.routed)
-	case cx.routed != "":
+	if cx.routed != "" {
 		fmt.Fprintf(a.Stdout, "Codex signed in with ChatGPT is routed through it too (Munch provider in %s); start a new Codex process to pick that up.\n", cx.routed)
-	case cx.unrouted:
+	} else if cx.unrouted {
 		fmt.Fprintln(a.Stdout, "Codex signed in with ChatGPT is not routed through it; run `munch install` again to set that up, or follow the manual Codex steps in the proxy README.")
-	}
-	if windows {
-		fmt.Fprintln(a.Stdout, "Already running apps keep their old environment. The PowerShell routing command applies only to this session and tools launched from it.")
-		fmt.Fprintf(a.Stdout, "To verify, run `munch status%s`, then send a request from a routed tool and look for it in the dashboard under Activity.\n", args)
-		return
 	}
 	if sh.wired != "" {
 		fmt.Fprintln(a.Stdout, "Open a new terminal to pick this up: shells and apps that are already running keep their old environment.")
@@ -920,6 +916,34 @@ func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shel
 		fmt.Fprintln(a.Stdout, "Once that line is in place, open a new terminal: shells and apps that are already running keep their old environment.")
 	}
 	fmt.Fprintln(a.Stdout, "Check on it any time with `munch status`.")
+}
+
+// printWindowsInstallSummary closes the Windows install output with a short
+// list of next steps. It is ASCII only for older console code pages.
+func (a *App) printWindowsInstallSummary(cfg config.Config, svc serviceOutcome, cx codexOutcome, dt desktopOutcome, flags []envFlag) {
+	kind := detectShell()
+	args := shellEnvArgs(kind, flags)
+	fmt.Fprintln(a.Stdout, "\nNext steps:")
+	if dt.claudeSettingsChanged {
+		fmt.Fprintln(a.Stdout, "- Restart Claude Desktop, then start a new local Code session.")
+	}
+	fmt.Fprintf(a.Stdout, "- Route CLI tools you start from this terminal:  %s\n", envHookLine(kind, flags))
+	fmt.Fprintf(a.Stdout, "  Or route a single launch:  munch exec%s -- claude\n", args)
+	switch {
+	case cfg.OMPViaPlugin:
+		fmt.Fprintln(a.Stdout, "- OMP reports through omp-tm; that routing command defines an `omp` function that runs it without the proxy variables.")
+	case ompOnPath():
+		fmt.Fprintln(a.Stdout, "- That routing command defines an `omp` function without OLLAMA_HOST, so OMP talks to local Ollama directly.")
+	}
+	if cx.routed != "" {
+		fmt.Fprintf(a.Stdout, "- Codex with ChatGPT sign-in uses the Munch provider in %s; start a new Codex process.\n", cx.routed)
+	} else if cx.unrouted {
+		fmt.Fprintln(a.Stdout, "- Codex with ChatGPT sign-in is not routed; run `munch install` again to set it up.")
+	}
+	if !svc.autoStart {
+		fmt.Fprintf(a.Stdout, "- Munch stops when you sign out of Windows; run `munch start%s` after signing in.\n", args)
+	}
+	fmt.Fprintf(a.Stdout, "- Check it with `munch status%s`; your requests show up in the dashboard under Activity.\n", args)
 }
 
 func (a *App) cmdUninstall(args []string) error {
@@ -942,10 +966,11 @@ func (a *App) cmdUninstall(args []string) error {
 	fmt.Fprintln(a.Stdout, "Uninstalled munch service")
 	hookErr := a.removeShellHooks()
 	codexErr := a.removeCodexRoute()
+	claudeErr := a.removeClaudeDesktopSettings()
 	if cfg.OMPViaPlugin {
 		fmt.Fprintf(a.Stdout, "The %s plugin was left installed and keeps reporting OMP usage; remove it with `omp plugin uninstall %s` if you don't want that.\n", omp.PluginName, omp.PluginName)
 	}
-	return errors.Join(hookErr, codexErr)
+	return errors.Join(hookErr, codexErr, claudeErr)
 }
 
 // removeShellHooks deletes the munch block from every profile install may

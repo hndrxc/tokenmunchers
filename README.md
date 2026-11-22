@@ -85,23 +85,15 @@ To upgrade, run `munch update`, then `munch restart` if the background service i
 
 #### Windows PowerShell
 
-On Windows 10 or 11 (`amd64` or `arm64`), open PowerShell 5.1 or newer. No Go or administrator account is needed. Download the installer to a file first so you can review it:
+On Windows 10 or 11 (`amd64` or `arm64`), open PowerShell 5.1 or newer. No Go or administrator account is needed. Create a `tm_` key in [Settings](https://tokenmunchers.taiisshort.com/settings) → API keys, then run:
 
 ```powershell
-Invoke-WebRequest -UseBasicParsing `
-  -Uri 'https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1' `
-  -OutFile '.\install-munch.ps1'
+irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1 | iex
 ```
 
-After reviewing the file, run `.\install-munch.ps1`. If `RemoteSigned` blocks the downloaded file, you can unblock **only that file** after reviewing it (`Unblock-File -LiteralPath '.\install-munch.ps1'`). If policy still blocks it, use the [manual ZIP install](proxy/README.md#manual-windows-install) instead; don't change machine policy.
+Paste the key when Munch asks. Answer the questions it asks about Claude Desktop, the Codex desktop app, Codex CLI, and OMP when it detects them. Then run `munch status` and look for your first routed request in the dashboard's **Activity** feed.
 
-The installer verifies the release checksum, installs to `%LOCALAPPDATA%\Programs\Munch`, and updates your user `PATH`. It runs `munch install`, which prompts for the dashboard `tm_` key from [step 2](#2-create-an-api-key) if needed. `-DownloadOnly` skips CLI setup; run `munch install` later. Open a new terminal if `munch` isn't found.
-
-Munch starts a background process but doesn't set up automatic startup or edit PowerShell profiles. After signing in again, run `munch start` if it isn't running. In your current terminal, test with `munch status` and `munch exec -- claude` (if Claude Code is installed). Send a real request and look for it in the dashboard's **Activity** feed. To route tools launched from that terminal, run `munch env --shell powershell | Out-String | Invoke-Expression` first.
-
-For Codex CLI with ChatGPT sign-in, accept the optional Codex setup in `munch install` and restart Codex; environment variables alone won't route that mode. For OMP, accept the optional plugin setup to report through the plugin, or decline and disable the existing plugin if you prefer proxy reporting. Don't use both for the same calls.
-
-On Windows, upgrade with `munch stop` and then download, review, and rerun the installer; native `munch update` isn't supported. See the [Windows guide](proxy/README.md#windows-powershell) for locations and uninstall.
+Munch runs as a background process but doesn't start automatically at Windows sign-in; run `munch start` after signing in if it isn't running. See [Install details](proxy/README.md#install-details) for what the installer does, reviewing it first, and upgrading.
 
 #### Option B: OMP plugin only
 

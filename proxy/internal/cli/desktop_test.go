@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,11 @@ func TestDesktopCLIOptInAndManualClaudeEnv(t *testing.T) {
 	if err != nil || first.DesktopClaudeSince.IsZero() || !first.DesktopCodexSince.IsZero() {
 		t.Fatalf("unexpected opt-in state: %v", err)
 	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	settingsEnv := readSettingsEnv(t, settingsPath)
+	if settingsEnv["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"] != "http://127.0.0.1:8787"+key.RoutePrefix()+proxy.ClaudeLogsPath || len(settingsEnv) != 20 {
+		t.Fatalf("claude on should keep KEEP and append the telemetry env, got %v", settingsEnv)
+	}
 	run(0, "claude", "on")
 	again, err := config.LoadFile(paths)
 	if err != nil || !again.DesktopClaudeSince.Equal(first.DesktopClaudeSince) {
@@ -95,10 +101,59 @@ func TestDesktopCLIOptInAndManualClaudeEnv(t *testing.T) {
 	if _, err := os.Stat(desktopDir(paths)); !os.IsNotExist(err) {
 		t.Fatalf("desktop configuration touched collector state: %v", err)
 	}
-	for path, want := range settings {
-		if got, err := os.ReadFile(path); err != nil || string(got) != want {
-			t.Fatalf("provider settings modified: %v", err)
-		}
+	gotSettings := readJSONMap(t, settingsPath)
+	if !reflect.DeepEqual(gotSettings, map[string]any{"env": map[string]any{"KEEP": "unchanged"}}) {
+		t.Errorf("claude off should restore the original settings, got %v", gotSettings)
+	}
+	codexPath := filepath.Join(codexDir, "config.toml")
+	if got, err := os.ReadFile(codexPath); err != nil || string(got) != settings[codexPath] {
+		t.Fatalf("codex config modified: %v", err)
+	}
+}
+
+// readSettingsEnv decodes the env object of a Claude settings.json.
+func readSettingsEnv(t *testing.T, path string) map[string]string {
+	t.Helper()
+	var doc struct {
+		Env map[string]string `json:"env"`
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc.Env
+}
+
+func TestDesktopClaudeOnBlockedKeepsOptIn(t *testing.T) {
+	paths := config.Paths{ConfigDir: t.TempDir(), StateDir: t.TempDir()}
+	for _, key := range []string{"TOKENMUNCHERS_KEY", "TOKENMUNCHERS_API_KEY", "TOKENMUNCHERS_URL", "TMPROXY_LISTEN"} {
+		t.Setenv(key, "")
+	}
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	writeSettingsFile(t, settingsPath, `{"env":{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"https://example.com/v1/logs"}}`)
+	cfg := config.Config{APIKey: "tm_" + strings.Repeat("A", 43)}
+	if err := config.Save(paths, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	a := &App{Stdout: &out, Stderr: &stderr}
+	argv := []string{"desktop", "--config-dir", paths.ConfigDir, "--state-dir", paths.StateDir, "claude", "on"}
+	if code := a.Run(argv); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Claude Desktop not set up: left "+settingsPath+" as is because") || !strings.Contains(out.String(), "munch desktop claude-env") {
+		t.Errorf("blocked settings should print the reason and fallback:\n%s", out.String())
+	}
+	if disk, err := config.LoadFile(paths); err != nil || disk.DesktopClaudeSince.IsZero() {
+		t.Errorf("opt-in must stay on despite blocked settings (err=%v)", err)
+	}
+	if got := readTextFile(t, settingsPath); !strings.Contains(got, "example.com") {
+		t.Errorf("blocked settings were modified:\n%s", got)
 	}
 }
 

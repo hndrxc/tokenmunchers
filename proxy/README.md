@@ -19,31 +19,13 @@ For first-party desktop subscription usage without routing inference through Mun
 
 ### Windows PowerShell
 
-Use PowerShell 5.1 or newer on Windows 10 or 11 (`amd64` or `arm64`). No Go or administrator account is needed. Create a `tm_` key on the [dashboard](https://tokenmunchers.taiisshort.com/settings) under **Settings → API keys**. Download the installer to a file and review it before running it:
+Open PowerShell 5.1 or newer on Windows 10 or 11 (`amd64` or `arm64`). No Go or administrator account is needed. Create a `tm_` key on the [dashboard](https://tokenmunchers.taiisshort.com/settings) under **Settings → API keys**, then run:
 
 ```powershell
-Invoke-WebRequest -UseBasicParsing `
-  -Uri 'https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1' `
-  -OutFile '.\install-munch.ps1'
+irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1 | iex
 ```
 
-Run `.\install-munch.ps1` after review. If `RemoteSigned` blocks the download, you can unblock just the reviewed file with `Unblock-File -LiteralPath '.\install-munch.ps1'`. If policy still blocks it, use the [manual ZIP install](#manual-windows-install) instead of changing policy.
-
-The installer checks `SHA256SUMS`, installs `munch.exe` to `%LOCALAPPDATA%\Programs\Munch`, adds that directory to your user `PATH`, and runs `munch install`. Paste the key when Munch asks; your input is visible. Use `.\install-munch.ps1 -DownloadOnly` to install the executable and update `PATH` without running CLI setup, then run `munch install` when ready. If `munch` isn't found, open a new terminal or run `& "$env:LOCALAPPDATA\Programs\Munch\munch.exe"` with the desired arguments.
-
-Munch starts a detached process in your login session. It does not set up an automatic startup task or service, edit PowerShell profiles, or change execution policy. Run `munch start` after signing in again if it's not running. To check it and route a single command without changing your terminal's environment:
-
-```powershell
-munch status
-munch exec -- claude
-```
-
-With Claude Code installed, make a real request and check the dashboard's **Activity** feed. Alternatively, run `munch env --shell powershell | Out-String | Invoke-Expression` in the PowerShell terminal where you'll launch your tools; it applies only there and to processes started from it. Restart tools that were already open.
-
-- **Codex CLI with ChatGPT sign-in:** accept the optional setup in `munch install` and restart Codex. Environment variables alone don't route this mode. See [manual Codex setup](#4-codex-chatgpt-sign-in) if needed.
-- **OMP:** accept the optional plugin setup to report through the plugin, or decline it and disable `omp-tokenmunchers` if you prefer the proxy. See [OMP routing](#oh-my-pi-omp-tm) to avoid double counting.
-
-To upgrade, stop Munch and [rerun the installer](#update-an-installed-release). For config, queue, and log paths see [Locations](#locations); to remove it without losing your key see [Uninstall on Windows](#uninstall-on-windows).
+Paste the key when Munch asks; your input is visible. Answer the questions it asks about desktop apps (Claude Desktop, the Codex desktop app), Codex CLI, and OMP when it detects them. Then run `munch status` and look for your first routed request in the dashboard's **Activity** feed. For what the installer does, reviewing it before running it, and upgrading, see [Install details](#install-details).
 
 ### Linux and macOS
 
@@ -61,16 +43,67 @@ export PATH="$HOME/.local/bin:$PATH"
 munch install
 ```
 
-If Munch needs a key, paste it at the prompt; your input is visible. Munch starts the service and offers to configure your shell, OMP, and Codex CLI as applicable. See [what Munch changes](#what-munch-changes) for exactly what it writes and what uninstall leaves behind.
+Paste the key when asked; your input is visible. `munch install` starts the background service and offers to configure your shell, OMP, and Codex CLI as applicable. Then open a new terminal, restart any tools that were already running, run `munch status`, and look for a routed call in the dashboard's **Activity** feed. See [Install details](#install-details) for the `munch install` flags, upgrades, and the manual setup.
 
-Open a new terminal and restart any tools that were already running. Run `munch status`, then make a request in a routed tool and look for it in the dashboard’s **Activity** feed. For later upgrades, see [Update an installed release](#update-an-installed-release).
+---
+
+## Install details
+
+### What the Windows installer does
+
+`install-munch.ps1` downloads the matching native Windows executable from the newest stable release, checks the ZIP against `SHA256SUMS`, installs `munch.exe` to `%LOCALAPPDATA%\Programs\Munch`, adds that directory to your user `PATH`, and runs `munch install`. Munch then runs as a detached process in your login session: it does not set up an automatic startup task or service, edit PowerShell profiles, or change execution policy. It stops at Windows sign-out, so run `munch start` after signing in if it isn't running.
+
+### Review the installer before running it
+
+Prefer to review the script before running it? Download it first:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing `
+  -Uri 'https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1' `
+  -OutFile '.\install-munch.ps1'
+```
+
+Run `.\install-munch.ps1` after review. If `RemoteSigned` blocks the download, unblock just the reviewed file with `Unblock-File -LiteralPath '.\install-munch.ps1'`. If policy still blocks it, use the [manual ZIP install](#manual-windows-install) instead; never change machine execution policy. To install the executable and update `PATH` without running CLI setup, use `-DownloadOnly`:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1))) -DownloadOnly
+```
+
+Then run `munch install` when ready. If `munch` isn't found afterward, open a new terminal (or run `& "$env:LOCALAPPDATA\Programs\Munch\munch.exe"` with the desired arguments).
+
+### Routing tools in a terminal
+
+`munch env` exports the private route URLs for the current terminal only. Apply it in the PowerShell terminal where you'll launch your tools, then restart tools that were already open:
+
+```powershell
+munch env --shell powershell | Out-String | Invoke-Expression
+```
+
+Or route a single command without changing your terminal's environment:
+
+```powershell
+munch status
+munch exec -- claude
+```
+
+### Codex CLI and OMP
+
+- **Codex CLI with ChatGPT sign-in:** accept the optional setup in `munch install` and restart Codex. Environment variables alone don't route this mode. See [manual Codex setup](#4-codex-chatgpt-sign-in) if needed.
+- **OMP:** accept the optional plugin setup to report through the plugin, or decline it and disable `omp-tokenmunchers` if you prefer the proxy. See [OMP routing](#oh-my-pi-omp-tm) to avoid double counting.
+
+### `munch install` flags
 
 | Flag | Effect |
 | --- | --- |
-| `--yes` | Don't prompt: answer yes to every question, including omp-tm. With no saved or exported API key it fails instead of asking for one. |
+| `--yes` | Don't prompt: answer yes to every question, including desktop collection and omp-tm. With no saved or exported API key it fails instead of asking for one. |
+| `--no-desktop` | Don't inspect or change desktop collection (Claude Desktop, Codex desktop app) or Claude settings. |
 | `--no-shell` | Don't touch shell profiles. The summary prints the line to add yourself. |
 | `--no-codex` | Don't inspect or modify Codex settings. |
 | `--config-dir`, `--state-dir`, `--listen` | Use non-default locations. The service is set up with them, but the profile block runs `munch env --check` without flags, so `install` leaves your profile alone and prints the `eval` line, with the same flags, for you to add. |
+
+### Upgrading
+
+On Windows, stop Munch and [rerun the installer](#update-an-installed-release); it reuses your saved key. On Linux and macOS, run `munch update` then `munch restart`. For config, queue, and log paths see [Locations](#locations); to remove Munch without losing your key see [Uninstall on Windows](#uninstall-on-windows).
 
 ### Manual setup
 
@@ -168,7 +201,7 @@ Install a [release](#install-a-release), or build manually. For a native Windows
 go build -o munch.exe ./cmd/munch
 ```
 
-The commands below use `munch` on `PATH`; in PowerShell, use `.\munch.exe` if running the binary from the current directory. On any platform, use the existing `munch login` to save your TokenMunchers key. Opt in to either collector independently:
+The commands below use `munch` on `PATH`; in PowerShell, use `.\munch.exe` if running the binary from the current directory. On Windows, `munch install` offers each collector when it detects the app; answering yes opts in without the commands below. On any platform, use the existing `munch login` to save your TokenMunchers key. Opt in to either collector independently:
 
 ```text
 munch desktop claude on
@@ -179,13 +212,19 @@ If you already run a Munch service or background daemon, use `munch restart` to 
 
 ### Claude Desktop: local Code only
 
+On Windows, `munch install` offers Claude Desktop collection when it detects the app; `munch desktop claude on` does the same on any platform. Munch then adds its telemetry settings to the `env` object of your Claude user `settings.json` (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`), keeping every other setting and the key order, and repoints them on later installs if the proxy address or local key changed. It never overlays telemetry you configured: if the file already has other `OTEL_*` or Claude telemetry keys, or an `otelHeadersHelper`, Munch leaves it alone, says why, and you can use the manual fallback below.
+
+After any change, restart Claude Desktop and start a **new local Code session**. Munch accepts eligible first-party Claude Desktop request telemetry, not ordinary chat or remote Code sessions.
+
+If Munch can't edit `settings.json`, or you prefer to set it up by hand, use the manual fallback:
+
 1. Run `munch desktop claude-env` privately. It prints a JSON map of environment variable names to string values, including a private local telemetry endpoint. Treat that endpoint capability like a password; don't share it in tickets, screenshots, logs, or config checked into version control.
 2. Merge that map into the `env` object in your Claude user `settings.json` (`CLAUDE_CONFIG_DIR` if set, otherwise `~/.claude`), or add the same name/value pairs to the saved environment for Desktop Local. Keep unrelated settings and environment entries. Do not overlay existing telemetry configuration, header helpers, or a managed exporter. If they're already configured, leave them alone rather than replacing them for the pilot.
-3. Restart Claude Desktop and start a **new local Code session**. Munch accepts eligible first-party Claude Desktop request telemetry, not ordinary chat or remote Code sessions.
+3. Restart Claude Desktop and start a **new local Code session**.
 
 ### ChatGPT Desktop: Codex on “This computer” only
 
-Select **This computer** in Codex in ChatGPT Desktop and keep its native `openai` model provider. Munch follows confirmed, uncompressed local Desktop rollouts and rescans retained active and archived rollouts across daemon downtime, counting only eligible usage from opt-in onward. It does not read legacy or compressed rollouts. If you use a custom `CODEX_HOME`, set it to the absolute path of the Desktop Codex home in the daemon's environment; setting it only in an interactive terminal does not change an installed service's environment. The default is `~/.codex`. There is no proxy URL to set and no CLI provider configuration to change. Do not also route or wrap the same desktop app usage for proxy accounting; the two reporting paths are separate.
+On Windows, `munch install` offers Codex desktop app collection when it detects the app; nothing in Codex changes. Select **This computer** in Codex in ChatGPT Desktop and keep its native `openai` model provider. Munch follows confirmed, uncompressed local Desktop rollouts and rescans retained active and archived rollouts across daemon downtime, counting only eligible usage from opt-in onward. It does not read legacy or compressed rollouts. If you use a custom `CODEX_HOME`, set it to the absolute path of the Desktop Codex home in the daemon's environment; setting it only in an interactive terminal does not change an installed service's environment. The default is `~/.codex`. There is no proxy URL to set and no CLI provider configuration to change. Do not also route or wrap the same desktop app usage for proxy accounting; the two reporting paths are separate.
 
 ### What is counted and sent
 
@@ -200,7 +239,7 @@ The desktop state directory is bound to the TokenMunchers key and contributions 
 
 ### Disable or uninstall
 
-Use `munch desktop claude off` and/or `munch desktop codex off`, then restart Munch (or stop and rerun the foreground process). When disabling Claude or uninstalling Munch, remove **only** the telemetry variables you added for this pilot from user settings or the Desktop Local saved environment. Restart Claude Desktop and use a new local Code session so it no longer has the old environment. There are no Codex provider settings from the pilot to undo. Disabling or uninstalling is not deletion of the desktop state directory or previously uploaded accounting.
+Use `munch desktop claude off` and/or `munch desktop codex off`, then restart Munch (or stop and rerun the foreground process). `munch desktop claude off` and `munch uninstall` remove only Munch's telemetry keys from `settings.json` when Munch wrote them; if you merged them by hand, remove only those variables from user settings or the Desktop Local saved environment. Restart Claude Desktop and start a new local Code session so it no longer has the old environment. There are no Codex provider settings from the pilot to undo. Disabling or uninstalling is not deletion of the desktop state directory or previously uploaded accounting.
 
 ---
 
@@ -225,31 +264,36 @@ On Windows, the default install directory is `%LOCALAPPDATA%\Programs\Munch`, th
 
 | File | Contents and writers |
 | --- | --- |
-| `<config>/config.json` (`0600`, directory `0700`) | `api_key`, `ingest_url`, `listen_addr` (`munch login`); `api_key` when none is saved and `omp_via_plugin` (`munch install`); `paused` (`munch pause`/`resume`); desktop collector opt-ins (`munch desktop`); `routes` (you) |
+| `<config>/config.json` (`0600`, directory `0700`) | `api_key`, `ingest_url`, `listen_addr` (`munch login`); `api_key` when none is saved and `omp_via_plugin` (`munch install`); `paused` (`munch pause`/`resume`); desktop collector opt-ins (`munch desktop`, and `munch install` on Windows); `routes` (you) |
 | `<config>/local-auth.key` (`0600`) | Random 256-bit local secret, created on the daemon's first start or by `install`. The private `/_tm/<secret>` URL prefix, the control token, and the health proof derive from it; deleting it changes every private URL, so re-run `munch install` and open new shells. |
 | `<config>/prices.json` | Only if you create it ([pricing](#custom-model-pricing-pricesjson)) |
 | `<state>/queue.jsonl` (`0600`) | Events awaiting delivery; renamed to `queue.jsonl.<pid>.<n>.flushing` while sending, deleted once delivered |
 | `<state>/usage.jsonl` (`0600`) | One metadata line per recorded call, for `munch stats`; never trimmed or deleted by Munch |
 | `<state>/tmproxy.log`, `<state>/tmproxy.pid` | Daemon output under launchd and the fallback (systemd uses `journalctl --user -u tmproxy`); PID file for the fallback only, removed on stop |
 | `<state>/desktop/` | State and durable pending contributions for the [desktop accounting pilot](#desktop-accounting-pilot), separate from the proxy queue |
+| Claude `settings.json` (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) | Desktop telemetry env vars under `env`, written atomically with 2-space indented JSON (mode `0600` when created) by `munch install` and `munch desktop claude on`; only Munch's exact telemetry keys are ever updated or removed ([Desktop accounting pilot](#desktop-accounting-pilot)) |
 
 ### Installer script and `munch login`
 
 `install-munch.sh` writes only `munch` (mode `755`) to `${MUNCH_INSTALL_DIR:-$HOME/.local/bin}`. It takes the newest published stable `munch-vX.Y.Z` release, verifies the archive against `SHA256SUMS` in a temporary directory under `$TMPDIR` (default `/tmp`), and moves the binary into place with one rename; temporary files are removed on exit. It does not touch `PATH`, profiles, config, or services, and does not run `munch`.
 
-`install-munch.ps1` installs the matching native Windows executable from the newest stable release after checking the ZIP against `SHA256SUMS`, adds its directory to the user `PATH`, and runs `munch install` unless `-DownloadOnly` was specified.
+`install-munch.ps1` is the Windows installer; run it from PowerShell with `irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1 | iex` (or download and review it first — see [Install details](#install-details)). It installs the matching native Windows executable from the newest stable release after checking the ZIP against `SHA256SUMS`, adds its directory to the user `PATH`, and runs `munch install` unless `-DownloadOnly` was specified.
 
 `munch login` saves `api_key` after a format check (no network call), plus `ingest_url` with `--url` and `listen_addr` with `--listen`. A running daemon keeps its old settings until `munch restart`.
 
 ### `munch install`
 
-Steps run in this order; if the key or service step fails, `install` stops before the OMP, shell, and Codex steps.
+Steps run in this order; if the key step fails, `install` stops; if the service step fails, it stops before the OMP, shell, and Codex steps.
 
 1. **API key.** Uses the key in `config.json`; otherwise saves `TOKENMUNCHERS_KEY` (then `TOKENMUNCHERS_API_KEY`) there, because the service does not see your shell environment; otherwise asks. With `--yes` or an empty answer and no key, it fails without changes.
-2. **Service.** Creates `local-auth.key` if missing and stops a running daemon so the new binary, config, and key take effect. On Linux with a `systemd --user` session it writes the unit and runs `systemctl --user daemon-reload` and `enable --now tmproxy.service`; on macOS it writes the plist and runs `launchctl unload` then `launchctl load -w`. On Linux without a user session it still writes the unit (nothing runs it) and starts the fallback; other systems get the fallback only. The unit and plist run `<absolute munch path> run --config-dir … --state-dir … --listen …`, so re-run `install` after moving the binary or changing those. It then waits up to 10 seconds for the daemon to prove it holds `local-auth.key`, or fails pointing at `munch status` and the service log.
-3. **Oh My Pi** (only if `omp` is on `PATH`). **Yes:** runs `omp plugin install omp-tokenmunchers` if `omp plugin list --json` doesn't show it, writes your key as `apiKey` (and a non-default `ingestUrl`) to `<OMP agent dir>/tokenmunchers/config.json` unless it already has a key, and sets `omp_via_plugin: true`. The agent dir is `~/.omp/agent`, adjusted by `PI_CONFIG_DIR`, `OMP_PROFILE`/`PI_PROFILE` (`profiles/<name>/agent`), or `PI_CODING_AGENT_DIR`. **No:** sets `omp_via_plugin` to false and warns if the plugin is installed. A failing `omp` or plugin config is only a warning; routing stays as it was.
-4. **Shell profile** (bash, zsh, or fish from `$SHELL`). In `~/.bashrc` (`~/.bash_profile` on macOS), `$ZDOTDIR/.zshrc` (else `~/.zshrc`), or `~/.config/fish/conf.d/munch.fish` (under `$XDG_CONFIG_HOME` if set), it adds or replaces only a block between `# >>> munch >>>` and `# <<< munch <<<` that runs `<absolute munch path> env --check` if that binary exists. The rest of the file stays byte-for-byte; symlinked profiles are edited at their target. Your own `munch env` line counts as already set up. Other shells, `--no-shell`, and the location flags change nothing and get the line printed.
-5. **Codex** (only if `codex` is on `PATH`; never with `--no-codex`). It reads `codex login status` only for whether you are signed in with ChatGPT; that output is never printed or stored, and Codex's credential files are never opened. It skips Codex if not signed in with ChatGPT, if your `chatgpt` route has a custom upstream, or if `$CODEX_HOME` (default `~/.codex`) is not a directory. After you confirm, it rewrites `$CODEX_HOME/config.toml` atomically with mode `0600`, creating it if needed: a marked `model_provider = "munch_chatgpt"` block at the top, the marked [provider table](#4-codex-chatgpt-sign-in) at the end, and an old plain-HTTP Munch `chatgpt_base_url` removed. It leaves the file alone and says why if another provider is selected (also by the active profile), `chatgpt_base_url` points at a custom backend, a `munch_chatgpt` provider differs from the documented one, Munch's blocks were edited, or the file is read-only, invalid TOML, or can't take the blocks without changing other settings. Running Codex processes keep their old config.
+2. **Desktop collection** (Windows only; always skipped with `--no-desktop`). Detects installed desktop apps; when it finds one you haven't opted in to yet, it asks whether to count it:
+   - **Claude Desktop** if `%LOCALAPPDATA%\Packages\Claude_*`, `%APPDATA%\Claude`, or `%LOCALAPPDATA%\AnthropicClaude` exists as a directory. If you accept (or are already opted in), Munch writes its telemetry settings into the `env` of your Claude user `settings.json` if that file can be edited — see [Desktop accounting pilot](#desktop-accounting-pilot). If the file is blocked by existing telemetry configuration, it says why and you use `munch desktop claude-env` by hand.
+   - **Codex desktop app** if `%LOCALAPPDATA%\Packages\OpenAI.Codex_*` or `%LOCALAPPDATA%\Packages\OpenAI.ChatGPT-Desktop_*` exists (not `OpenAI.CodexPrimaryRuntime.*`). Nothing in Codex changes.
+   It is silent when no desktop app is detected.
+3. **Service.** Creates `local-auth.key` if missing and stops a running daemon so the new binary, config, and key take effect. On Linux with a `systemd --user` session it writes the unit and runs `systemctl --user daemon-reload` and `enable --now tmproxy.service`; on macOS it writes the plist and runs `launchctl unload` then `launchctl load -w`. On Linux without a user session it still writes the unit (nothing runs it) and starts the fallback; other systems get the fallback only. The unit and plist run `<absolute munch path> run --config-dir … --state-dir … --listen …`, so re-run `install` after moving the binary or changing those. It then waits up to 10 seconds for the daemon to prove it holds `local-auth.key`, or fails pointing at `munch status` and the service log.
+4. **Oh My Pi** (only if `omp` is on `PATH`). **Yes:** runs `omp plugin install omp-tokenmunchers` if `omp plugin list --json` doesn't show it, writes your key as `apiKey` (and a non-default `ingestUrl`) to `<OMP agent dir>/tokenmunchers/config.json` unless it already has a key, and sets `omp_via_plugin: true`. The agent dir is `~/.omp/agent`, adjusted by `PI_CONFIG_DIR`, `OMP_PROFILE`/`PI_PROFILE` (`profiles/<name>/agent`), or `PI_CODING_AGENT_DIR`. **No:** sets `omp_via_plugin` to false and warns if the plugin is installed. A failing `omp` or plugin config is only a warning; routing stays as it was.
+5. **Shell profile** (bash, zsh, or fish from `$SHELL`). In `~/.bashrc` (`~/.bash_profile` on macOS), `$ZDOTDIR/.zshrc` (else `~/.zshrc`), or `~/.config/fish/conf.d/munch.fish` (under `$XDG_CONFIG_HOME` if set), it adds or replaces only a block between `# >>> munch >>>` and `# <<< munch <<<` that runs `<absolute munch path> env --check` if that binary exists. The rest of the file stays byte-for-byte; symlinked profiles are edited at their target. Your own `munch env` line counts as already set up. Other shells, `--no-shell`, and the location flags change nothing and get the line printed.
+6. **Codex** (only if `codex` is on `PATH`; never with `--no-codex`). It reads `codex login status` only for whether you are signed in with ChatGPT; that output is never printed or stored, and Codex's credential files are never opened. It skips Codex if not signed in with ChatGPT, if your `chatgpt` route has a custom upstream, or if `$CODEX_HOME` (default `~/.codex`) is not a directory. After you confirm, it rewrites `$CODEX_HOME/config.toml` atomically with mode `0600`, creating it if needed: a marked `model_provider = "munch_chatgpt"` block at the top, the marked [provider table](#4-codex-chatgpt-sign-in) at the end, and an old plain-HTTP Munch `chatgpt_base_url` removed. It leaves the file alone and says why if another provider is selected (also by the active profile), `chatgpt_base_url` points at a custom backend, a `munch_chatgpt` provider differs from the documented one, Munch's blocks were edited, or the file is read-only, invalid TOML, or can't take the blocks without changing other settings. Running Codex processes keep their old config.
 
 ### Daemon, delivery, and pause
 
@@ -284,6 +328,7 @@ Release builds only (source builds report `dev`), on Linux or macOS, `amd64` or 
 | The service: `systemctl --user disable --now` and unit deleted, or `launchctl unload -w` and plist deleted; then any fallback daemon that proves the key is stopped and `tmproxy.pid` deleted | `munch env` lines you added yourself | The `munch` binary |
 | The marked block in the bash, zsh, and fish profiles above, whatever your current shell (an emptied `munch.fish` is deleted) | Munch settings you wrote or edited in Codex's `config.toml`, including the manual provider; revert them, because Codex can't connect once the proxy is gone | The config directory: API key, routes, `local-auth.key`, `prices.json` |
 | Unedited Munch blocks in `$CODEX_HOME/config.toml` and `~/.codex/config.toml`; the provider table stays while anything else still selects `munch_chatgpt` | The `omp-tokenmunchers` plugin and its config, which keep reporting OMP | The state directory: proxy queued events (sent if you reinstall within 6.5 days), `usage.jsonl`, `tmproxy.log`, and `<state>/desktop/` (including pending contributions); and a Codex `config.toml` left empty |
+| Munch's Claude Desktop telemetry keys in `settings.json` (`$CLAUDE_CONFIG_DIR` or `~/.claude`) | Telemetry keys in Claude `settings.json` that differ from Munch's exact set (reported, kept) | Everything else in Claude `settings.json` |
 
 Open shells keep their variables until you open a new terminal or run `eval "$(munch env --unset)"`, and running Codex processes use the proxy until restarted. To remove everything (Linux paths; on macOS use `~/Library/Application Support/tmproxy` and `~/Library/Caches/tmproxy`):
 
@@ -297,7 +342,7 @@ rm ~/.local/bin/munch
 
 #### Uninstall on Windows
 
-Run `munch uninstall` before deleting the executable. This stops the daemon and removes the unedited Codex settings Munch added. Revert any manually configured Munch URLs and restart your tools. Close terminals where you applied routing, or clear it before removing the executable:
+Run `munch uninstall` before deleting the executable. This stops the daemon and removes the unedited Codex settings Munch added, plus Munch's Claude Desktop telemetry keys from `settings.json` if it wrote them; restart Claude Desktop afterwards. Revert any manually configured Munch URLs and restart your tools. Close terminals where you applied routing, or clear it before removing the executable:
 
 ```powershell
 munch env --unset --shell powershell | Out-String | Invoke-Expression

@@ -266,8 +266,10 @@ func (m *pidManager) Install(_ string) (string, error) {
 	return "", errors.New("auto-start service installation is not supported by the fallback pidfile backend on this OS")
 }
 
+// Uninstall stops a daemon that proves it holds this config's key; the
+// fallback has nothing else to remove.
 func (m *pidManager) Uninstall() error {
-	return nil
+	return m.Stop()
 }
 
 func (m *pidManager) Start(binaryPath string) error {
