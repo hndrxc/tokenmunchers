@@ -92,8 +92,8 @@ func TestDesktopSnapshotReplayAndIncrementalQueue(t *testing.T) {
 	if _, err := c.publish(context.Background(), Claude); !errors.Is(err, errDelivery) {
 		t.Fatalf("lost acknowledgment returned %v", err)
 	}
-	if c.Pending() != 101 {
-		t.Fatalf("lost acknowledgment changed pending: %d", c.Pending())
+	if c.Pending() != 101 || c.Delivered() != 0 {
+		t.Fatalf("lost acknowledgment changed pending %d or delivered %d", c.Pending(), c.Delivered())
 	}
 	if err := c.SetPaused(true); err != nil {
 		t.Fatal(err)
@@ -111,8 +111,8 @@ func TestDesktopSnapshotReplayAndIncrementalQueue(t *testing.T) {
 	if _, err := c.publish(context.Background(), Claude); err != nil {
 		t.Fatal(err)
 	}
-	if c.Pending() != 0 {
-		t.Fatalf("second batch left %d records", c.Pending())
+	if c.Pending() != 0 || c.Delivered() != 101 {
+		t.Fatalf("second batch left %d records, delivered %d", c.Pending(), c.Delivered())
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -144,12 +144,23 @@ func TestDesktopSnapshotReplayAndIncrementalQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	c = openLedger(t, opts)
+	if c.Delivered() != 101 {
+		t.Fatalf("delivered %d after restart, want 101", c.Delivered())
+	}
 	if err := c.SetPaused(false); err != nil {
 		t.Fatal(err)
 	}
 	ledgerRecord(t, c, "id0", ledgerEpoch.Add(5*time.Millisecond))
 	if c.Pending() != 0 {
 		t.Fatal("acknowledged identity was not deduplicated across restart")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Turning the source off and on moves its activation; earlier deliveries no longer count.
+	opts.ClaudeSince = ledgerEpoch.Add(time.Hour)
+	if c = openLedger(t, opts); c.Delivered() != 0 {
+		t.Fatalf("delivered %d after reactivation, want 0", c.Delivered())
 	}
 }
 

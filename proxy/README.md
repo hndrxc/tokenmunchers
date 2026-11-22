@@ -175,7 +175,7 @@ munch desktop claude on
 munch desktop codex on
 ```
 
-If you already run a Munch service or background daemon, use `munch restart` to load the new settings. Otherwise, run `munch run` in a terminal and leave it running. To reload settings in foreground mode, stop it and run `munch run` again. Use `munch desktop` for collector status or `munch status` for daemon status including desktop pending delivery. If you use custom config or state directories, use the same directories for these commands and the daemon.
+If you already run a Munch service or background daemon, use `munch restart` to load the new settings. Otherwise, run `munch run` in a terminal and leave it running. To reload settings in foreground mode, stop it and run `munch run` again. Use `munch desktop` for collector status or `munch status` for daemon status, including how many desktop requests TokenMunchers has accepted since you turned each enabled source on and how many await delivery. If you use custom config or state directories, use the same directories for these commands and the daemon.
 
 ### Claude Desktop: local Code only
 

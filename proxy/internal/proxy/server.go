@@ -64,8 +64,9 @@ const ClaudeLogsPath = "/__desktop/v1/logs"
 
 // DesktopStatus contains only safe, local accounting diagnostics.
 type DesktopStatus struct {
-	Pending *int   `json:"pending,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Pending   *int   `json:"pending,omitempty"`
+	Delivered *int   `json:"delivered,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // Options wires dependencies into the reverse proxy Server.

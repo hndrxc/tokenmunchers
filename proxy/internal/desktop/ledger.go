@@ -55,17 +55,19 @@ type Collector struct {
 	binding          string
 	endpoint, apiKey string
 	sources          map[string]*sourceLedger
+	since            map[string]time.Time // current activation per harness; zero when off
 	windows          []pauseWindow
 	pauseResumeFloor time.Time
 }
 
 type sourceLedger struct {
-	Device  string
-	Cutoff  time.Time
-	minimum time.Time
-	seen    map[string]struct{}
-	queue   []Observation
-	pending *snapshot
+	Device    string
+	Cutoff    time.Time
+	minimum   time.Time
+	seen      map[string]struct{}
+	queue     []Observation
+	pending   *snapshot
+	delivered int // acknowledged calls timestamped at or after minimum
 }
 
 type pauseWindow struct{ start, end time.Time }
@@ -108,7 +110,8 @@ func Open(opts Options) (*Collector, error) {
 		return nil, err
 	}
 	binding := fmt.Sprintf("%x", sha256.Sum256([]byte(endpoint+"\x00"+opts.APIKey)))
-	c := &Collector{endpoint: endpoint, apiKey: opts.APIKey, sources: make(map[string]*sourceLedger)}
+	c := &Collector{endpoint: endpoint, apiKey: opts.APIKey, sources: make(map[string]*sourceLedger),
+		since: map[string]time.Time{Claude: activation[0], Codex: activation[1]}}
 	c.stateLock, err = acquireStateLock(opts.Dir)
 	if err != nil {
 		return nil, err
@@ -137,8 +140,7 @@ func Open(opts Options) (*Collector, error) {
 		if since.IsZero() {
 			continue
 		}
-		s := c.sources[harness]
-		if s == nil {
+		if c.sources[harness] == nil {
 			device, err := uuid()
 			if err != nil {
 				return nil, err
@@ -151,9 +153,7 @@ func Open(opts Options) (*Collector, error) {
 			if err := c.replay(entry); err != nil {
 				return nil, err
 			}
-			s = c.sources[harness]
 		}
-		s.minimum = since
 	}
 	c.pauses, err = openJournal(opts.Dir, "pause.jsonl", c.replayPause)
 	if err != nil {
@@ -214,7 +214,7 @@ func (c *Collector) replay(entry ledgerEntry) error {
 		if s != nil || (entry.Harness != Claude && entry.Harness != Codex) || entry.Cutoff == nil || !uuidShape.MatchString(entry.Device) {
 			return errCorrupt
 		}
-		c.sources[entry.Harness] = &sourceLedger{Device: entry.Device, Cutoff: *entry.Cutoff, seen: make(map[string]struct{})}
+		c.sources[entry.Harness] = &sourceLedger{Device: entry.Device, Cutoff: *entry.Cutoff, minimum: c.since[entry.Harness], seen: make(map[string]struct{})}
 	case "record":
 		if s == nil || entry.Observation == nil || entry.Observation.Harness != entry.Harness || !validObservation(*entry.Observation) {
 			return errCorrupt
@@ -255,6 +255,14 @@ func (s *sourceLedger) add(o Observation) {
 
 func (s *sourceLedger) ack() {
 	n := len(s.pending.IDs)
+	// Record compares untruncated provider times with minimum, then stores them
+	// truncated to the millisecond.
+	floor := s.minimum.Truncate(time.Millisecond)
+	for _, o := range s.queue[:n] {
+		if !o.Timestamp.Before(floor) {
+			s.delivered++
+		}
+	}
 	clear(s.queue[:n])
 	s.queue = s.queue[n:]
 	if len(s.queue) == 0 {
@@ -269,6 +277,20 @@ func (c *Collector) Pending() int {
 	n := 0
 	for _, s := range c.sources {
 		n += len(s.queue)
+	}
+	return n
+}
+
+// Delivered counts calls TokenMunchers acknowledged since each enabled
+// source's current activation, including deliveries before this process started.
+func (c *Collector) Delivered() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, s := range c.sources {
+		if !s.minimum.IsZero() {
+			n += s.delivered
+		}
 	}
 	return n
 }

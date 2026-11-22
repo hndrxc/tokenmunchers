@@ -1040,8 +1040,8 @@ func (a *App) cmdStatus(args []string) error {
 			if live.Desktop.Error != "" {
 				fmt.Fprintf(a.Stdout, "Desktop:      %s\n", live.Desktop.Error)
 			}
-			if live.Desktop.Pending != nil {
-				fmt.Fprintf(a.Stdout, "Desktop:      %d pending requests\n", *live.Desktop.Pending)
+			if d := live.Desktop; d.Pending != nil && d.Delivered != nil {
+				fmt.Fprintf(a.Stdout, "Desktop:      %d requests delivered since opt-in (%d pending)\n", *d.Delivered, *d.Pending)
 			}
 		}
 	} else {

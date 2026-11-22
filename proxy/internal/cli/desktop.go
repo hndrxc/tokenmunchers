@@ -311,8 +311,8 @@ func (d *desktopRuntime) status() *proxy.DesktopStatus {
 	status := &proxy.DesktopStatus{Error: d.lastErr}
 	d.errMu.Unlock()
 	if d.ledger != nil {
-		pending := d.ledger.Pending()
-		status.Pending = &pending
+		pending, delivered := d.ledger.Pending(), d.ledger.Delivered()
+		status.Pending, status.Delivered = &pending, &delivered
 	}
 	return status
 }
