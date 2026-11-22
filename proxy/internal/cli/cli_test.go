@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tokenmunchers/tokenmunchers/proxy/internal/claudesettings"
 	"github.com/tokenmunchers/tokenmunchers/proxy/internal/config"
 	"github.com/tokenmunchers/tokenmunchers/proxy/internal/localauth"
+	"github.com/tokenmunchers/tokenmunchers/proxy/internal/proxy"
 	"github.com/tokenmunchers/tokenmunchers/proxy/internal/service"
 	"github.com/tokenmunchers/tokenmunchers/proxy/internal/shellrc"
 )
@@ -639,6 +641,11 @@ func newInstallFixture(t *testing.T) *installFixture {
 	if runtime.GOOS == "windows" {
 		t.Skip("install tests use POSIX shell profiles")
 	}
+	return newInstallFixtureForPlatform(t)
+}
+
+func newInstallFixtureForPlatform(t *testing.T) *installFixture {
+	t.Helper()
 	tmp := t.TempDir()
 	f := &installFixture{
 		t:        t,
@@ -667,11 +674,17 @@ func newInstallFixture(t *testing.T) *installFixture {
 	f.listen = strings.TrimPrefix(srv.URL, "http://")
 
 	t.Setenv("HOME", f.home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", f.home)
+	}
 	t.Setenv("SHELL", "/bin/bash")
 	t.Setenv("PATH", filepath.Join(tmp, "no-such-bin"))
 	t.Setenv("TMPROXY_CONFIG_DIR", f.cfgDir)
 	t.Setenv("TMPROXY_STATE_DIR", f.stateDir)
 	t.Setenv("TMPROXY_LISTEN", f.listen)
+	t.Setenv("LOCALAPPDATA", filepath.Join(tmp, "localappdata"))
+	t.Setenv("APPDATA", filepath.Join(tmp, "appdata"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(tmp, "claude-config"))
 	for _, name := range []string{
 		"TOKENMUNCHERS_KEY", "TOKENMUNCHERS_API_KEY", "TOKENMUNCHERS_URL",
 		"ZDOTDIR", "XDG_CONFIG_HOME", "CODEX_HOME",
@@ -815,6 +828,56 @@ func TestInstallSetsUpKeyServiceAndShell(t *testing.T) {
 	}
 }
 
+func TestWindowsInstallLeavesProfilesAloneAndShowsSessionRouting(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows install behavior")
+	}
+	f := newInstallFixtureForPlatform(t) // SHELL is set to bash.
+	f.svc.backend = "pidfile"
+	f.svc.installErr = errors.New("not supported")
+	t.Setenv("TOKENMUNCHERS_KEY", f.key)
+	packages := filepath.Join(os.Getenv("LOCALAPPDATA"), "Packages")
+	claudePkg := filepath.Join(packages, "Claude_pzs8sxrjxfjjc")
+	codexPkg := filepath.Join(packages, "OpenAI.Codex_abc")
+	for _, dir := range []string{claudePkg, codexPkg} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	code, out, errOut := f.run("", "install", "--yes", "--no-codex")
+	if code != 0 {
+		t.Fatalf("install failed (code=%d): out=%s err=%s", code, out, errOut)
+	}
+	if entries, err := os.ReadDir(f.home); err != nil || len(entries) != 0 {
+		t.Errorf("Windows install should not touch profiles (entries=%v, err=%v)", entries, err)
+	}
+	if disk, err := config.LoadFile(f.paths()); err != nil || disk.DesktopClaudeSince.IsZero() || disk.DesktopCodexSince.IsZero() {
+		t.Errorf("Windows install should opt in to detected desktop apps (err=%v): %+v", err, disk)
+	}
+	settingsPath := claudesettings.Path(claudesettings.Dir(os.Getenv, f.home))
+	env := readJSONMap(t, settingsPath)["env"].(map[string]any)
+	if env["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"] == "" || len(env) != 19 {
+		t.Errorf("Windows install should write the Claude telemetry env, got %v", env)
+	}
+	for _, want := range []string{
+		"Next steps:",
+		"- Restart Claude Desktop, then start a new local Code session.",
+		"munch env --shell powershell | Out-String | Invoke-Expression",
+		"munch exec -- claude",
+		"run `munch start` after signing in",
+		"munch status",
+		"dashboard under Activity",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "$PROFILE") || strings.Contains(out, f.key) || strings.Contains(out, "/_tm/") {
+		t.Errorf("Windows setup should not suggest a profile edit or expose a secret:\n%s", out)
+	}
+}
+
 func TestInstallPromptsForKey(t *testing.T) {
 	f := newInstallFixture(t)
 
@@ -914,10 +977,16 @@ func TestInstallEnvFlags(t *testing.T) {
 	if got := installEnvFlags("", "", ""); len(got) != 0 {
 		t.Errorf("no overrides should yield no flags, got %v", got)
 	}
-	got := installEnvFlags("rel/cfg", "/abs/state", " 127.0.0.1:9000 ")
-	want := []envFlag{{"--config-dir", absPath("rel/cfg")}, {"--state-dir", "/abs/state"}, {"--listen", "127.0.0.1:9000"}}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relConfig := filepath.Join("rel", "cfg")
+	stateDir := t.TempDir()
+	got := installEnvFlags(relConfig, stateDir, " 127.0.0.1:9000 ")
+	want := []envFlag{{"--config-dir", filepath.Join(cwd, relConfig)}, {"--state-dir", stateDir}, {"--listen", "127.0.0.1:9000"}}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("installEnvFlags = %v, want %v", got, want)
+		t.Fatalf("installEnvFlags = %v, want %v", got, want)
 	}
 	if !filepath.IsAbs(got[0].value) {
 		t.Errorf("a profile line cannot rely on the working directory, got %q", got[0].value)
@@ -1276,5 +1345,239 @@ func TestExecOMPViaPluginDropsEveryProxyVariable(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "omp-tm") {
 		t.Errorf("exec should say omp runs without the proxy variables: %s", errOut)
+	}
+}
+
+// snapshotService records what the world looks like when the service starts,
+// so tests can prove install wrote desktop opt-ins before starting it.
+type snapshotService struct {
+	*fakeService
+	snapshot func()
+}
+
+func (s *snapshotService) Start(bin string) error {
+	s.snapshot()
+	return s.fakeService.Start(bin)
+}
+
+// fakeDesktopApps creates Claude Desktop and Codex desktop app directories
+// under the fixture's isolated LOCALAPPDATA and returns their package dirs.
+func (f *installFixture) fakeDesktopApps(t *testing.T) {
+	t.Helper()
+	packages := filepath.Join(os.Getenv("LOCALAPPDATA"), "Packages")
+	for _, dir := range []string{
+		filepath.Join(packages, "Claude_pzs8sxrjxfjjc"),
+		filepath.Join(packages, "OpenAI.Codex_abc"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestInstallDesktopCollectsOptInsBeforeService(t *testing.T) {
+	old := installDesktopSupported
+	installDesktopSupported = true
+	t.Cleanup(func() { installDesktopSupported = old })
+
+	f := newInstallFixtureForPlatform(t)
+	f.fakeDesktopApps(t)
+	t.Setenv("TOKENMUNCHERS_KEY", f.key)
+	settingsPath := claudesettings.Path(claudesettings.Dir(os.Getenv, f.home))
+
+	var out, errBuf bytes.Buffer
+	var snapshotErr error
+	app := &App{Stdin: strings.NewReader("y\ny\n"), Stdout: &out, Stderr: &errBuf}
+	app.newService = func(config.Paths, string) service.Manager {
+		return &snapshotService{fakeService: f.svc, snapshot: func() {
+			disk, err := config.LoadFile(f.paths())
+			if err != nil || disk.DesktopClaudeSince.IsZero() || disk.DesktopCodexSince.IsZero() {
+				snapshotErr = errors.New("desktop opt-ins were not saved before the service started")
+			}
+			if _, err := os.Stat(settingsPath); err != nil {
+				snapshotErr = errors.New("Claude settings.json did not exist when the service started")
+			}
+		}}
+	}
+
+	if code := app.Run([]string{"install", "--config-dir", f.cfgDir, "--state-dir", f.stateDir}); code != 0 {
+		t.Fatalf("install exited %d: %s", code, errBuf.String())
+	}
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
+	}
+	for _, want := range []string{
+		"Count Claude Desktop usage? Munch adds telemetry settings to " + settingsPath + ".",
+		"Count Codex desktop app usage? Nothing in Codex changes.",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output is missing the prompt %q:\n%s", want, out.String())
+		}
+	}
+	key, err := localauth.Load(f.cfgDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "http://" + f.listen + key.RoutePrefix() + proxy.ClaudeLogsPath
+	env := readSettingsEnv(t, settingsPath)
+	if env["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"] != endpoint || len(env) != 19 {
+		t.Errorf("settings endpoint = %q, want %q (env size %d)", env["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"], endpoint, len(env))
+	}
+	if all := out.String() + errBuf.String(); strings.Contains(all, "/_tm/") || strings.Contains(all, f.key) {
+		t.Errorf("install printed a secret:\n%s", all)
+	}
+	if got := strings.Join(f.svc.calls, ","); got != "install,start" {
+		t.Errorf("service calls = %s, want install,start", got)
+	}
+
+	// Rerunning is idempotent: current settings stay byte-identical and the
+	// opt-in time is not reset.
+	before := readTextFile(t, settingsPath)
+	first, err := config.LoadFile(f.paths())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.svc.calls = nil
+	code, rerunOut, rerunErr := f.run("", "install", "--yes")
+	if code != 0 {
+		t.Fatalf("second install failed (code=%d): out=%s err=%s", code, rerunOut, rerunErr)
+	}
+	if got := strings.Join(f.svc.calls, ","); got != "stop,install,start" {
+		t.Errorf("second run service calls = %s, want stop,install,start", got)
+	}
+	if after := readTextFile(t, settingsPath); after != before {
+		t.Errorf("settings.json changed on rerun:\n%s\n---\n%s", before, after)
+	}
+	second, err := config.LoadFile(f.paths())
+	if err != nil || !second.DesktopClaudeSince.Equal(first.DesktopClaudeSince) || !second.DesktopCodexSince.Equal(first.DesktopCodexSince) {
+		t.Errorf("rerun reset an opt-in time (err=%v)", err)
+	}
+}
+
+func TestInstallDesktopNoDesktopSkips(t *testing.T) {
+	old := installDesktopSupported
+	installDesktopSupported = true
+	t.Cleanup(func() { installDesktopSupported = old })
+
+	f := newInstallFixtureForPlatform(t)
+	f.fakeDesktopApps(t)
+	t.Setenv("TOKENMUNCHERS_KEY", f.key)
+	settingsPath := claudesettings.Path(claudesettings.Dir(os.Getenv, f.home))
+
+	code, out, errOut := f.run("", "install", "--yes", "--no-desktop")
+	if code != 0 {
+		t.Fatalf("install failed (code=%d): out=%s err=%s", code, out, errOut)
+	}
+	if disk, err := config.LoadFile(f.paths()); err != nil || !disk.DesktopClaudeSince.IsZero() || !disk.DesktopCodexSince.IsZero() {
+		t.Errorf("--no-desktop must not opt in (err=%v): %+v", err, disk)
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Errorf("--no-desktop must not write Claude settings (err=%v)", err)
+	}
+	if strings.Contains(out, "Desktop:") || strings.Contains(out, "Count Claude Desktop usage") {
+		t.Errorf("--no-desktop should skip desktop questions:\n%s", out)
+	}
+}
+
+func TestInstallDesktopBlockedClaudeSettingsPromptsOnlyCodex(t *testing.T) {
+	old := installDesktopSupported
+	installDesktopSupported = true
+	t.Cleanup(func() { installDesktopSupported = old })
+
+	f := newInstallFixtureForPlatform(t)
+	t.Setenv("TOKENMUNCHERS_KEY", f.key)
+	settingsPath := claudesettings.Path(claudesettings.Dir(os.Getenv, f.home))
+	writeSettingsFile(t, settingsPath, `{"env":{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"https://example.com/v1/logs"}}`)
+	f.fakeDesktopApps(t)
+
+	code, out, errOut := f.run("y\n", "install")
+	if code != 0 {
+		t.Fatalf("install failed (code=%d): out=%s err=%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		"Claude Desktop not set up: left " + settingsPath + " as is because it already exports telemetry somewhere else.",
+		"munch desktop claude-env",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Count Claude Desktop usage") {
+		t.Errorf("blocked Claude settings must not prompt:\n%s", out)
+	}
+	disk, err := config.LoadFile(f.paths())
+	if err != nil || !disk.DesktopClaudeSince.IsZero() || disk.DesktopCodexSince.IsZero() {
+		t.Errorf("blocked Claude settings must not opt in Claude (err=%v): %+v", err, disk)
+	}
+	if got := readTextFile(t, settingsPath); !strings.Contains(got, "example.com") {
+		t.Errorf("blocked settings were modified:\n%s", got)
+	}
+}
+
+func TestUninstallRemovesClaudeSettings(t *testing.T) {
+	f := newInstallFixtureForPlatform(t)
+	key, err := localauth.LoadOrCreate(f.cfgDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "http://127.0.0.1:8787" + key.RoutePrefix() + proxy.ClaudeLogsPath
+	settingsPath := claudesettings.Path(claudesettings.Dir(os.Getenv, f.home))
+	env := claudesettings.Env(endpoint)
+	env["KEEP"] = "x"
+	data, err := json.Marshal(map[string]any{"env": env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSettingsFile(t, settingsPath, string(data))
+
+	code, out, errOut := f.run("", "uninstall")
+	if code != 0 {
+		t.Fatalf("uninstall failed (code=%d): out=%s err=%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		"Removed munch's telemetry settings from " + settingsPath,
+		"Restart Claude Desktop.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+	got := readJSONMap(t, settingsPath)
+	if !reflect.DeepEqual(got, map[string]any{"env": map[string]any{"KEEP": "x"}}) {
+		t.Errorf("uninstall left the wrong settings: %v", got)
+	}
+
+	// Foreign telemetry (not a Munch route) is left untouched.
+	foreign := filepath.Join(t.TempDir(), "settings.json")
+	writeSettingsFile(t, foreign, `{"env":{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"https://example.com/v1/logs"}}`)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Dir(foreign))
+	code, out, errOut = f.run("", "uninstall")
+	if code != 0 {
+		t.Fatalf("uninstall failed (code=%d): out=%s err=%s", code, out, errOut)
+	}
+	if strings.Contains(out, "Restart Claude Desktop.") {
+		t.Errorf("foreign telemetry settings must not be touched:\n%s", out)
+	}
+	if got := readTextFile(t, foreign); !strings.Contains(got, "example.com") {
+		t.Errorf("foreign settings were modified:\n%s", got)
+	}
+}
+
+func readTextFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func writeSettingsFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

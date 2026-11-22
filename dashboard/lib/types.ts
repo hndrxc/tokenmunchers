@@ -5,16 +5,21 @@ export interface Profile {
   avatar_url: string | null;
 }
 
-export interface AccountingQuality {
-  has_unknown_tokens?: boolean;
+export interface Spend {
+  known_cost_usd: number | null;
+  unpriced_tokens: number | null;
   has_unknown_cost?: boolean;
-  has_unknown_calls?: boolean;
   has_estimated_cost?: boolean;
+}
+
+export interface AccountingQuality extends Pick<Spend, "has_unknown_cost" | "has_estimated_cost"> {
+  has_unknown_tokens?: boolean;
+  has_unknown_calls?: boolean;
   has_reconstructed?: boolean;
 }
 
 /** One row of leaderboard / leaderboard_since / leaderboard_all_time. */
-export interface Totals extends AccountingQuality {
+export interface Totals extends AccountingQuality, Spend {
   user_id: string;
   call_count: number | null;
   input_tokens: number | null;
@@ -23,6 +28,9 @@ export interface Totals extends AccountingQuality {
   cache_write_tokens: number | null;
   total_tokens: number | null;
   subagent_tokens: number | null;
+  // Optional during rollout; null means coverage for the snapshot is unavailable.
+  known_subagent_tokens?: number | null;
+  known_main_tokens?: number | null;
   cost_usd: number | null;
 }
 
@@ -51,12 +59,12 @@ export interface LiveSession {
   last_seen: string;
 }
 
-export interface DailyRow extends AccountingQuality {
+export interface DailyRow extends AccountingQuality, Spend {
   user_id: string;
   day: string;
   provider: string;
   model: string;
-  is_subagent: boolean | null;
+  is_subagent: boolean;
   call_count: number | null;
   total_tokens: number | null;
   cost_usd: number | null;

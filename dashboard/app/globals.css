@@ -476,6 +476,70 @@ input {
   vertical-align: 1px;
 }
 
+.activity-source-badge {
+  max-width: 100%;
+  margin-left: 0;
+  overflow-wrap: anywhere;
+}
+
+.activity-tags {
+  margin-bottom: 8px;
+  min-width: 0;
+}
+.activity-tags summary {
+  width: fit-content;
+  max-width: 100%;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.activity-tags__settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  justify-items: start;
+  margin-top: 6px;
+}
+.activity-tags__source,
+.activity-tags__label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.activity-tags__source {
+  margin: 0;
+  padding: 4px 6px 6px;
+  border: 1px solid var(--shadow);
+}
+.activity-tags__source legend {
+  font-weight: 700;
+}
+.activity-tags__label input {
+  width: 12em;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 5px;
+  border: 0;
+  background: var(--white);
+  box-shadow: var(--sunken);
+}
+.activity-tags button {
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  background: var(--silver);
+  box-shadow: var(--raised);
+  cursor: pointer;
+  outline-offset: -3px;
+}
+.activity-tags button:active,
+.activity-tags button[aria-pressed="true"] {
+  box-shadow: var(--sunken);
+}
+
 /* ---- stat tiles ---- */
 .tiles {
   display: grid;

@@ -2,10 +2,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { Dashboard } from "@/components/Dashboard";
 import { Nav } from "@/components/Nav";
+import type { ActivityCall } from "@/lib/activity";
 import { getMe } from "@/lib/me";
 import { byUser, lastDays, startOfUtcDay, utcDay } from "@/lib/stats";
 import { createClient } from "@/lib/supabase/server";
-import { EVENT_COLUMNS, type DailyRow, type LiveSession, type Profile, type UsageEvent } from "@/lib/types";
+import type { DailyRow, LiveSession, Profile } from "@/lib/types";
 
 import { NotMember } from "./NotMember";
 
@@ -24,7 +25,7 @@ async function loadDailyHistory(supabase: SupabaseClient, todayKey: string): Pro
   for (let offset = 0; ; offset += DAILY_PAGE) {
     const { data, error } = await supabase
       .from("usage_daily_all")
-      .select("user_id,day,provider,model,is_subagent,call_count,total_tokens,cost_usd")
+      .select("user_id,day,provider,model,is_subagent,call_count,total_tokens,cost_usd,known_cost_usd,unpriced_tokens")
       .lt("day", todayKey)
       .order("day")
       .order("user_id")
@@ -52,10 +53,11 @@ export default async function Home() {
     supabase.rpc("leaderboard_since", { p_since: `${days.at(-7)!}T00:00:00.000Z` }),
     supabase.rpc("leaderboard_since", { p_since: startOfUtcDay(now) }),
     supabase.rpc("leaderboard_all_time"),
-    supabase.from("usage_events").select(EVENT_COLUMNS).order("ts", { ascending: false }).limit(50),
+    supabase.rpc("recent_activity"),
     supabase.from("live_sessions").select("*").gte("last_seen", new Date(now - 90_000).toISOString()),
     loadDailyHistory(supabase, todayKey),
   ]);
+  if (feed.error) throw new Error(`Failed to load recent activity: ${feed.error.message}`);
 
   return (
     <>
@@ -65,7 +67,7 @@ export default async function Home() {
         week={byUser(week.data)}
         today={byUser(today.data)}
         allTime={byUser(allTime.data)}
-        feed={(feed.data ?? []) as UsageEvent[]}
+        feed={(feed.data ?? []) as ActivityCall[]}
         live={(live.data ?? []) as LiveSession[]}
         daily={daily}
         days={days}

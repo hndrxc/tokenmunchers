@@ -54,6 +54,8 @@ const (
 	// maxControlBodyBytes bounds other control replies (status, flush, ...).
 	maxControlBodyBytes = 1 << 20
 
+	postControlTimeout = 10 * time.Second
+
 	challengeHeader = "X-TMProxy-Challenge"
 	controlHeader   = "X-TMProxy-Control"
 )
@@ -105,9 +107,9 @@ func readLimited(r io.Reader, max int64) ([]byte, error) {
 	return body, nil
 }
 
-// verifyHealthBody validates the health identity and that its proof answers
-// nonce under key (constant-time; an invalid or zero key never verifies).
-func verifyHealthBody(body []byte, nonce string, key localauth.Key) bool {
+// verifiedHealthPID returns the positive PID from a valid health response whose
+// proof answers nonce under key, or zero if verification fails.
+func verifiedHealthPID(body []byte, nonce string, key localauth.Key) int {
 	var h struct {
 		OK      bool   `json:"ok"`
 		Version string `json:"version"`
@@ -115,44 +117,45 @@ func verifyHealthBody(body []byte, nonce string, key localauth.Key) bool {
 		Proof   string `json:"proof"`
 	}
 	if err := json.Unmarshal(body, &h); err != nil {
-		return false
+		return 0
 	}
-	if !h.OK || h.Version == "" || h.PID <= 0 {
-		return false
+	if !h.OK || h.Version == "" || h.PID <= 0 || !key.VerifyProof(nonce, h.Proof) {
+		return 0
 	}
-	return key.VerifyProof(nonce, h.Proof)
+	return h.PID
 }
 
 // challengeHealth sends a fresh random challenge to /_tmproxy/health over
-// client and returns the health body only if the peer proves it holds key.
+// client and returns the health body and PID only if the peer proves it holds key.
 // No credential is sent: the challenge is public randomness.
-func challengeHealth(ctx context.Context, client *http.Client, listenAddr string, key localauth.Key) ([]byte, error) {
+func challengeHealth(ctx context.Context, client *http.Client, listenAddr string, key localauth.Key) ([]byte, int, error) {
 	nonce, err := localauth.NewNonce()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	url := fmt.Sprintf("http://%s/_tmproxy/health", normalizeClientAddr(listenAddr))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set(challengeHeader, nonce)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("health check returned HTTP %d", resp.StatusCode)
+		return nil, 0, fmt.Errorf("health check returned HTTP %d", resp.StatusCode)
 	}
 	body, err := readLimited(resp.Body, maxHealthBodyBytes)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if !verifyHealthBody(body, nonce, key) {
-		return nil, errors.New("listener did not prove it is this user's munch")
+	pid := verifiedHealthPID(body, nonce, key)
+	if pid == 0 {
+		return nil, 0, errors.New("listener did not prove it is this user's munch")
 	}
-	return body, nil
+	return body, pid, nil
 }
 
 // ProbeHealth reports whether the munch daemon holding key is responding on
@@ -162,7 +165,7 @@ func challengeHealth(ctx context.Context, client *http.Client, listenAddr string
 func ProbeHealth(ctx context.Context, listenAddr string, key localauth.Key) bool {
 	client := newControlClient(800*time.Millisecond, false)
 	defer client.CloseIdleConnections()
-	_, err := challengeHealth(ctx, client, listenAddr, key)
+	_, _, err := challengeHealth(ctx, client, listenAddr, key)
 	return err == nil
 }
 
@@ -178,8 +181,9 @@ func probeDaemon(ctx context.Context, paths config.Paths, listenAddr string) boo
 
 // doControl verifies the daemon's proof first and only then sends the control
 // token, over the very connection that was verified. The token is never sent
-// to a peer that failed authentication.
-func doControl(ctx context.Context, method string, timeout time.Duration, listenAddr, action string, key localauth.Key) ([]byte, int, error) {
+// to a peer that failed authentication. If set, beforeControl runs after
+// authentication and can veto the request.
+func doControl(ctx context.Context, method string, timeout time.Duration, listenAddr, action string, key localauth.Key, beforeControl func(pid int) error) ([]byte, int, error) {
 	if !validAction.MatchString(action) {
 		return nil, 0, fmt.Errorf("invalid control action %q", action)
 	}
@@ -190,12 +194,17 @@ func doControl(ctx context.Context, method string, timeout time.Duration, listen
 	client := newControlClient(timeout, true)
 	defer client.CloseIdleConnections()
 
-	health, err := challengeHealth(ctx, client, listenAddr, key)
+	health, pid, err := challengeHealth(ctx, client, listenAddr, key)
 	if err != nil {
 		return nil, 0, fmt.Errorf("munch authentication failed: %w", err)
 	}
 	if method == http.MethodGet && action == "health" {
 		return health, http.StatusOK, nil
+	}
+	if beforeControl != nil {
+		if err := beforeControl(pid); err != nil {
+			return nil, 0, err
+		}
 	}
 
 	url := fmt.Sprintf("http://%s/_tmproxy/%s", normalizeClientAddr(listenAddr), action)
@@ -218,13 +227,13 @@ func doControl(ctx context.Context, method string, timeout time.Duration, listen
 
 // PostControl sends an authenticated POST to a local /_tmproxy/<action> endpoint.
 func PostControl(ctx context.Context, listenAddr, action string, key localauth.Key) ([]byte, int, error) {
-	return doControl(ctx, http.MethodPost, 10*time.Second, listenAddr, action, key)
+	return doControl(ctx, http.MethodPost, postControlTimeout, listenAddr, action, key, nil)
 }
 
 // GetControl sends an authenticated GET to a local /_tmproxy/<action> endpoint.
 // For "health" it returns the proof-verified health body.
 func GetControl(ctx context.Context, listenAddr, action string, key localauth.Key) ([]byte, int, error) {
-	return doControl(ctx, http.MethodGet, 3*time.Second, listenAddr, action, key)
+	return doControl(ctx, http.MethodGet, 3*time.Second, listenAddr, action, key, nil)
 }
 
 func normalizeClientAddr(listenAddr string) string {
@@ -251,13 +260,19 @@ func listenerPresent(listenAddr string) bool {
 	return true
 }
 
+type processExitWaiter interface {
+	wait() error
+	close()
+}
+
 // pidManager provides a portable background daemon fallback using a detached child process,
 // an informational PID file, and the authenticated /_tmproxy/shutdown control API.
 // It never signals a process by PID: only a daemon that proves possession of the
 // local key can be stopped.
 type pidManager struct {
-	paths      config.Paths
-	listenAddr string
+	paths           config.Paths
+	listenAddr      string
+	openProcessWait func(pid int) (processExitWaiter, error)
 }
 
 func (m *pidManager) Backend() string { return "pidfile" }
@@ -266,8 +281,10 @@ func (m *pidManager) Install(_ string) (string, error) {
 	return "", errors.New("auto-start service installation is not supported by the fallback pidfile backend on this OS")
 }
 
+// Uninstall stops a daemon that proves it holds this config's key; the
+// fallback has nothing else to remove.
 func (m *pidManager) Uninstall() error {
-	return nil
+	return m.Stop()
 }
 
 func (m *pidManager) Start(binaryPath string) error {
@@ -318,30 +335,70 @@ func (m *pidManager) Start(binaryPath string) error {
 func (m *pidManager) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	var stopped bool
 	key, err := localauth.Load(m.paths.ConfigDir)
-	if err == nil && ProbeHealth(ctx, m.listenAddr, key) {
-		_, code, err := PostControl(ctx, m.listenAddr, "shutdown", key)
+	if err == nil {
+		stopped, err = m.stopDaemon(ctx, key)
 		if err != nil {
-			return fmt.Errorf("stop munch: %w", err)
+			return err
 		}
-		if code < 200 || code > 299 {
-			return fmt.Errorf("stop munch: shutdown request returned HTTP %d", code)
-		}
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			if !ProbeHealth(context.Background(), m.listenAddr, key) {
-				_ = os.Remove(m.paths.PIDFile())
-				return nil
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		return fmt.Errorf("stop munch: daemon on %s did not shut down", m.listenAddr)
 	}
-	if listenerPresent(m.listenAddr) {
+	if !stopped && listenerPresent(m.listenAddr) {
 		return fmt.Errorf("stop munch: listener on %s could not be verified as this user's munch; not stopping it", m.listenAddr)
 	}
 	_ = os.Remove(m.paths.PIDFile())
 	return nil
+}
+
+// stopDaemon reports whether it stopped an authenticated daemon. Once a
+// daemon proves its identity, any subsequent shutdown failure is an error,
+// even if the listener has since closed.
+func (m *pidManager) stopDaemon(ctx context.Context, key localauth.Key) (bool, error) {
+	var beforeControl func(int) error
+	var process processExitWaiter
+	var daemonPID int
+	if m.openProcessWait != nil {
+		beforeControl = func(pid int) error {
+			daemonPID = pid
+			var err error
+			process, err = m.openProcessWait(pid)
+			if err != nil {
+				return fmt.Errorf("open process for daemon PID %d: %w", pid, err)
+			}
+			return nil
+		}
+	} else if !ProbeHealth(ctx, m.listenAddr, key) {
+		return false, nil
+	}
+
+	_, code, err := doControl(ctx, http.MethodPost, postControlTimeout, m.listenAddr, "shutdown", key, beforeControl)
+	if process != nil {
+		defer process.close()
+	}
+	if beforeControl != nil && daemonPID == 0 {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stop munch: %w", err)
+	}
+	if code < 200 || code > 299 {
+		return false, fmt.Errorf("stop munch: shutdown request returned HTTP %d", code)
+	}
+	if process != nil {
+		if err := process.wait(); err != nil {
+			return false, fmt.Errorf("stop munch: daemon PID %d: %w; check %s", daemonPID, err, m.paths.LogFile())
+		}
+		return true, nil
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !ProbeHealth(context.Background(), m.listenAddr, key) {
+			return true, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false, fmt.Errorf("stop munch: daemon on %s did not shut down", m.listenAddr)
 }
 
 func (m *pidManager) Status() Info {

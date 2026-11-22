@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -95,6 +94,8 @@ func (a *App) Run(args []string) int {
 		err = a.cmdUninstall(rest)
 	case "status":
 		err = a.cmdStatus(rest)
+	case "desktop":
+		err = a.cmdDesktop(rest)
 	case "pause":
 		err = a.cmdPause(rest, true)
 	case "resume":
@@ -137,10 +138,13 @@ Commands:
   stop                 Stop the background proxy daemon
   restart              Restart the background proxy daemon
   install              Set up the background service, and offer to configure OMP, the shell,
-                       and Codex with ChatGPT sign-in (--yes, --no-shell, --no-codex)
+                       Codex with ChatGPT sign-in, and desktop usage collection on Windows
+                       (--yes, --no-shell, --no-codex, --no-desktop)
   update               Replace this binary with the latest stable Munch release
-  uninstall            Stop and remove the service and remove Munch-managed shell and Codex setup
+  uninstall            Stop and remove the service and remove Munch-managed shell, Codex, and Claude
+                       telemetry setup
   status               Show proxy runtime, queue, and service status
+  desktop              Configure opt-in first-party desktop usage collection
   pause                Pause reporting (proxied AI traffic continues uninterrupted)
   resume               Resume reporting
   flush                Immediately flush queued usage events to TokenMunchers
@@ -200,7 +204,8 @@ func newPrompter(in io.Reader, out io.Writer, yes bool) *prompter {
 // apiKey asks for a TokenMunchers API key and checks its format. An empty
 // answer, or EOF, yields errNoKeyEntered.
 func (p *prompter) apiKey() (string, error) {
-	fmt.Fprint(p.out, "Paste your TokenMunchers API key (tm_...): ")
+	fmt.Fprintln(p.out, "Create an API key in the TokenMunchers dashboard (https://tokenmunchers.taiisshort.com/settings) under Settings > API keys.")
+	fmt.Fprint(p.out, "Paste your TokenMunchers API key (tm_...; input is visible): ")
 	line, err := p.in.ReadString('\n')
 	if errors.Is(err, io.EOF) {
 		fmt.Fprintln(p.out) // input ended mid-line; finish the prompt line
@@ -352,9 +357,10 @@ func (a *App) cmdRun(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// The reporter only runs once the listener is bound, so a failed startup
-	// (e.g. address in use) never touches the network or the on-disk queue.
-	var reporterStarted atomic.Bool
+	// Neither reporter starts until bind succeeds, so a failed bind never
+	// scans desktop data, writes reporting state, or touches the network.
+	collector := &desktopRuntime{paths: paths, dir: desktopDir(paths), cfg: cfg, logger: logger}
+	reporterStarted := false
 	srv, err := proxy.New(proxy.Options{
 		Config:        cfg,
 		Paths:         paths,
@@ -365,9 +371,13 @@ func (a *App) cmdRun(args []string) error {
 		Verbose:       *verbose,
 		OnShutdownReq: cancel,
 		LocalKey:      localKey,
+		ClaudeLogs:    collector.claudeLogs(),
+		OnPauseChange: collector.setPaused,
+		DesktopStatus: collector.status,
 		OnReady: func() {
+			collector.start(ctx)
 			reporter.Start()
-			reporterStarted.Store(true)
+			reporterStarted = true
 			logger.Printf("listening on http://%s (paused=%v)", cfg.ListenAddr, cfg.Paused)
 		},
 	})
@@ -376,8 +386,10 @@ func (a *App) cmdRun(args []string) error {
 	}
 
 	runErr := srv.ListenAndServe(ctx)
+	cancel()
+	collector.stop()
 
-	if reporterStarted.Load() {
+	if reporterStarted {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		reporter.Stop(stopCtx)
 		stopCancel()
@@ -446,9 +458,9 @@ var installHealthTimeout = 10 * time.Second
 // errNoKeyAvailable is returned when install has no API key and cannot ask for one.
 var errNoKeyAvailable = errors.New("no API key: run `munch login` (or set TOKENMUNCHERS_KEY), then run `munch install` again")
 
-// cmdInstall sets munch up end to end: API key, background service, health
-// check, the omp-tm choice for Oh My Pi, the shell profile hook, and Codex
-// signed in with ChatGPT.
+// cmdInstall sets munch up end to end: API key, desktop usage opt-ins on
+// Windows, background service, health check, the omp-tm choice for Oh My Pi,
+// the shell profile hook, and Codex signed in with ChatGPT.
 func (a *App) cmdInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
@@ -457,6 +469,7 @@ func (a *App) cmdInstall(args []string) error {
 	yes := fs.Bool("yes", false, "don't prompt; accept the recommended answer to every question")
 	noShell := fs.Bool("no-shell", false, "don't modify shell profiles")
 	noCodex := fs.Bool("no-codex", false, "don't inspect or modify Codex settings")
+	noDesktop := fs.Bool("no-desktop", false, "don't inspect or change desktop collection or Claude settings")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -478,6 +491,14 @@ func (a *App) cmdInstall(args []string) error {
 	if err != nil {
 		return err
 	}
+	cfg.APIKey = key
+	var dt desktopOutcome
+	if !*noDesktop && installDesktopSupported {
+		dt, err = a.installDesktop(p, paths, cfg)
+		if err != nil {
+			return err
+		}
+	}
 	svc, err := a.installService(paths, cfg.ListenAddr, bin)
 	if err != nil {
 		return err
@@ -494,7 +515,7 @@ func (a *App) cmdInstall(args []string) error {
 	if err != nil {
 		return err
 	}
-	a.printInstallSummary(cfg, svc, sh, cx, flags)
+	a.printInstallSummary(cfg, svc, sh, cx, flags, dt)
 	return nil
 }
 
@@ -541,7 +562,7 @@ func (a *App) installAPIKey(p *prompter, paths config.Paths, envKey string) (str
 		return "", err
 	}
 	if src != "" {
-		a.stepf("API key", "using $%s, saved to %s (the background service can't see your shell environment)", src, paths.ConfigFile())
+		a.stepf("API key", "using $%s, saved to %s for the background daemon", src, paths.ConfigFile())
 	} else {
 		a.stepf("API key", "saved to %s", paths.ConfigFile())
 	}
@@ -586,6 +607,11 @@ func (a *App) installService(paths config.Paths, listen, bin string) (serviceOut
 	unit, err := mgr.Install(bin)
 	switch {
 	case err != nil && out.backend == "pidfile":
+		if runtime.GOOS == "windows" {
+			// Expected: munch runs for this Windows login only. The summary
+			// says to run `munch start` after signing in again.
+			break
+		}
 		a.stepf("Service", "auto-start is not available on this system; munch will run in the background until you stop it or restart")
 	case err != nil:
 		return out, fmt.Errorf("install %s service: %w", out.backend, err)
@@ -767,6 +793,9 @@ type shellOutcome struct {
 // that keeps it from doing so is reported and leaves wired empty.
 func (a *App) installShell(p *prompter, bin string, noShell bool, flags []envFlag) (shellOutcome, error) {
 	var out shellOutcome
+	if runtime.GOOS == "windows" {
+		return out, nil
+	}
 	home, homeErr := os.UserHomeDir()
 	var profile shellrc.Profile
 	detected := false
@@ -852,12 +881,16 @@ func shellNote() string {
 
 // printInstallSummary closes the install output with what is active and what
 // is left for the user to do.
-func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shellOutcome, cx codexOutcome, flags []envFlag) {
+func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shellOutcome, cx codexOutcome, flags []envFlag, dt desktopOutcome) {
+	if runtime.GOOS == "windows" {
+		a.printWindowsInstallSummary(cfg, svc, cx, dt, flags)
+		return
+	}
 	fmt.Fprintf(a.Stdout, "\nmunch is running on http://%s (%s).\n", cfg.ListenAddr, svc.backend)
+	kind := detectShell()
 	if !svc.autoStart {
 		fmt.Fprintln(a.Stdout, "It does not start by itself after a reboot or logout; run `munch start` then.")
 	}
-	kind := detectShell()
 	if sh.wired != "" {
 		fmt.Fprintf(a.Stdout, "New shells route Claude Code, Codex, Gemini and other AI tools through it (set up in %s).\n", sh.wired)
 	} else {
@@ -885,10 +918,9 @@ func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shel
 			fmt.Fprintln(a.Stdout, "OMP is proxied, but that line also defines an `omp` function that leaves out OLLAMA_HOST: OMP would drop the private route, so it talks to local Ollama directly.")
 		}
 	}
-	switch {
-	case cx.routed != "":
+	if cx.routed != "" {
 		fmt.Fprintf(a.Stdout, "Codex signed in with ChatGPT is routed through it too (Munch provider in %s); start a new Codex process to pick that up.\n", cx.routed)
-	case cx.unrouted:
+	} else if cx.unrouted {
 		fmt.Fprintln(a.Stdout, "Codex signed in with ChatGPT is not routed through it; run `munch install` again to set that up, or follow the manual Codex steps in the proxy README.")
 	}
 	if sh.wired != "" {
@@ -897,6 +929,34 @@ func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shel
 		fmt.Fprintln(a.Stdout, "Once that line is in place, open a new terminal: shells and apps that are already running keep their old environment.")
 	}
 	fmt.Fprintln(a.Stdout, "Check on it any time with `munch status`.")
+}
+
+// printWindowsInstallSummary closes the Windows install output with a short
+// list of next steps. It is ASCII only for older console code pages.
+func (a *App) printWindowsInstallSummary(cfg config.Config, svc serviceOutcome, cx codexOutcome, dt desktopOutcome, flags []envFlag) {
+	kind := detectShell()
+	args := shellEnvArgs(kind, flags)
+	fmt.Fprintln(a.Stdout, "\nNext steps:")
+	if dt.claudeSettingsChanged {
+		fmt.Fprintln(a.Stdout, "- Restart Claude Desktop, then start a new local Code session.")
+	}
+	fmt.Fprintf(a.Stdout, "- Route CLI tools you start from this terminal:  %s\n", envHookLine(kind, flags))
+	fmt.Fprintf(a.Stdout, "  Or route a single launch:  munch exec%s -- claude\n", args)
+	switch {
+	case cfg.OMPViaPlugin:
+		fmt.Fprintln(a.Stdout, "- OMP reports through omp-tm; that routing command defines an `omp` function that runs it without the proxy variables.")
+	case ompOnPath():
+		fmt.Fprintln(a.Stdout, "- That routing command defines an `omp` function without OLLAMA_HOST, so OMP talks to local Ollama directly.")
+	}
+	if cx.routed != "" {
+		fmt.Fprintf(a.Stdout, "- Codex with ChatGPT sign-in uses the Munch provider in %s; start a new Codex process.\n", cx.routed)
+	} else if cx.unrouted {
+		fmt.Fprintln(a.Stdout, "- Codex with ChatGPT sign-in is not routed; run `munch install` again to set it up.")
+	}
+	if !svc.autoStart {
+		fmt.Fprintf(a.Stdout, "- Munch stops when you sign out of Windows; run `munch start%s` after signing in.\n", args)
+	}
+	fmt.Fprintf(a.Stdout, "- Check it with `munch status%s`; your requests show up in the dashboard under Activity.\n", args)
 }
 
 func (a *App) cmdUninstall(args []string) error {
@@ -919,16 +979,26 @@ func (a *App) cmdUninstall(args []string) error {
 	fmt.Fprintln(a.Stdout, "Uninstalled munch service")
 	hookErr := a.removeShellHooks()
 	codexErr := a.removeCodexRoute()
+	claudeErr := a.removeClaudeDesktopSettings()
 	if cfg.OMPViaPlugin {
 		fmt.Fprintf(a.Stdout, "The %s plugin was left installed and keeps reporting OMP usage; remove it with `omp plugin uninstall %s` if you don't want that.\n", omp.PluginName, omp.PluginName)
 	}
-	return errors.Join(hookErr, codexErr)
+	if err := errors.Join(hookErr, codexErr, claudeErr); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		fmt.Fprintln(a.Stdout, `Uninstall leaves munch.exe and your user Path unchanged. To finish removing Munch, delete munch.exe from its installation directory (by default %LOCALAPPDATA%\Programs\Munch), then remove just that directory from your user Path in "Edit environment variables for your account".`)
+	}
+	return nil
 }
 
 // removeShellHooks deletes the munch block from every profile install may
 // have written, and points out hooks the user added by hand, which it cannot
 // safely remove.
 func (a *App) removeShellHooks() error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "warning: cannot find your home directory, so shell profiles were not checked: %v\n", err)
@@ -1010,6 +1080,14 @@ func (a *App) cmdStatus(args []string) error {
 		if live.Ingest.LastError != "" {
 			fmt.Fprintf(a.Stdout, "Last Error:   %s\n", live.Ingest.LastError)
 		}
+		if live.Desktop != nil {
+			if live.Desktop.Error != "" {
+				fmt.Fprintf(a.Stdout, "Desktop:      %s\n", live.Desktop.Error)
+			}
+			if d := live.Desktop; d.Pending != nil && d.Delivered != nil {
+				fmt.Fprintf(a.Stdout, "Desktop:      %d requests delivered since opt-in (%d pending)\n", *d.Delivered, *d.Pending)
+			}
+		}
 	} else {
 		rep := ingest.NewReporter(ingest.Options{QueuePath: paths.QueueFile()})
 		fmt.Fprintln(a.Stdout, "Status:       stopped")
@@ -1054,8 +1132,29 @@ func (a *App) cmdPause(args []string, pause bool) error {
 		if err != nil {
 			return err
 		}
+		desktopPath := desktopDir(paths)
+		if !pause && diskCfg.Paused && desktopEnabled(diskCfg) {
+			if _, err := os.Stat(desktopPath); errors.Is(err, os.ErrNotExist) {
+				// Without a ledger there is no durable pause window yet.
+				// Exclude records from before this resume conservatively.
+				now := time.Now().UTC()
+				if !diskCfg.DesktopClaudeSince.IsZero() {
+					diskCfg.DesktopClaudeSince = now
+				}
+				if !diskCfg.DesktopCodexSince.IsZero() {
+					diskCfg.DesktopCodexSince = now
+				}
+			}
+		}
+		var pauseErr error
+		if err := persistDesktopPause(desktopPath, pause, desktopEnabled(diskCfg)); err != nil {
+			pauseErr = fmt.Errorf("could not persist desktop reporting pause state: %w", err)
+			if !pause {
+				return pauseErr
+			}
+		}
 		diskCfg.Paused = pause
-		if err := config.Save(paths, diskCfg); err != nil {
+		if err := errors.Join(config.Save(paths, diskCfg), pauseErr); err != nil {
 			return err
 		}
 	}
@@ -1306,18 +1405,23 @@ func ompEnvWrapper(sh string, unset bool, names []string) string {
 // for shell (as reported by detectShell), repeating the install flags that tell
 // `munch env` where the proxy is.
 func envHookLine(shell string, flags []envFlag) string {
+	args := shellEnvArgs(shell, flags)
+	switch shell {
+	case "fish":
+		return "munch env --check --shell fish" + args + " | source"
+	case "powershell":
+		return "munch env --shell powershell" + args + " | Out-String | Invoke-Expression"
+	default:
+		return `eval "$(munch env --check` + args + `)"`
+	}
+}
+
+func shellEnvArgs(shell string, flags []envFlag) string {
 	var args strings.Builder
 	for _, f := range flags {
 		args.WriteString(" " + f.name + " " + quoteArg(shell, f.value))
 	}
-	switch shell {
-	case "fish":
-		return "munch env --check --shell fish" + args.String() + " | source"
-	case "powershell":
-		return "munch env --shell powershell" + args.String() + " | Out-String | Invoke-Expression"
-	default:
-		return `eval "$(munch env --check` + args.String() + `)"`
-	}
+	return args.String()
 }
 
 // quoteArg quotes s as one word of shell syntax: unchanged when plainly safe,

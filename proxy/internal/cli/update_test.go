@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -47,12 +48,6 @@ func (f *updateFixture) requests() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.seen...)
-}
-
-func (f *updateFixture) forgetRequests() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.seen = nil
 }
 
 // RoundTrip sends the request to the fixture server over plain HTTP, keeping
@@ -241,6 +236,9 @@ var updateListRequests = []string{
 }
 
 func TestUpdateCommandInstallsLatestStableRelease(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("release installation requires Linux or macOS symlink and permission semantics")
+	}
 	realDir, binDir := updateTestDir(t), updateTestDir(t)
 	realBin := filepath.Join(realDir, "munch")
 	link := filepath.Join(binDir, "munch")
@@ -305,16 +303,21 @@ func TestUpdateCommandInstallsLatestStableRelease(t *testing.T) {
 			t.Errorf("update touched %s (stat err=%v)", dir, err)
 		}
 	}
+}
 
-	// Updating again finds nothing newer and downloads nothing.
-	useUpdateFixture(t, fx, "1.4.0", link)
-	fx.forgetRequests()
-	code, out, errOut = runUpdateCommand(t)
+func TestUpdateCommandAlreadyLatest(t *testing.T) {
+	exe := filepath.Join(updateTestDir(t), "munch")
+	updateTestWriteFile(t, exe, updateTestBinary("munch 1.4.0"), 0o755)
+	fx := newUpdateFixture(t, "1.4.0", nil, "")
+	useUpdateFixture(t, fx, "1.4.0", exe)
+	updateTestIsolate(t)
+
+	code, out, errOut := runUpdateCommand(t)
 	if code != 0 || errOut != "" || !strings.Contains(out, "already the latest") {
-		t.Fatalf("second update (code=%d): out=%s err=%s", code, out, errOut)
+		t.Fatalf("update (code=%d): out=%s err=%s", code, out, errOut)
 	}
 	if got := fx.requests(); !reflect.DeepEqual(got, updateListRequests) {
-		t.Errorf("second update requests:\n got %v\nwant %v", got, updateListRequests)
+		t.Errorf("requests:\n got %v\nwant %v", got, updateListRequests)
 	}
 }
 
@@ -341,6 +344,9 @@ func TestUpdateCommandNeverDowngrades(t *testing.T) {
 }
 
 func TestUpdateCommandFailureLeavesBinaryIntact(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("release download cleanup requires Linux or macOS file removal semantics")
+	}
 	dir := updateTestDir(t)
 	exe := filepath.Join(dir, "munch")
 	updateTestWriteFile(t, exe, []byte("munch 1.3.0"), 0o755)
@@ -374,6 +380,21 @@ func TestUpdateCommandRefusesDevelopmentBuild(t *testing.T) {
 
 	code, out, errOut := runUpdateCommand(t)
 	if code != 1 || out != "" || !strings.Contains(errOut, "development build") {
+		t.Fatalf("update (code=%d): out=%s err=%s", code, out, errOut)
+	}
+}
+
+func TestUpdateCommandRejectsWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("exercises the native Windows updater options")
+	}
+	orig := config.Version
+	config.Version = "1.3.0"
+	t.Cleanup(func() { config.Version = orig })
+
+	code, out, errOut := runUpdateCommand(t)
+	if code != 1 || out != "" || !strings.Contains(errOut, selfupdate.ErrUnsupportedPlatform.Error()) ||
+		!strings.Contains(errOut, "windows/"+runtime.GOARCH) {
 		t.Fatalf("update (code=%d): out=%s err=%s", code, out, errOut)
 	}
 }

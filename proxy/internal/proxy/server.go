@@ -44,18 +44,29 @@ const (
 
 // StatusSnapshot describes live runtime state returned by GET /_tmproxy/status.
 type StatusSnapshot struct {
-	Version      string       `json:"version"`
-	PID          int          `json:"pid"`
-	ListenAddr   string       `json:"listen_addr"`
-	IngestURL    string       `json:"ingest_url"`
-	APIKeyMasked string       `json:"api_key"`
-	HasAPIKey    bool         `json:"has_api_key"`
-	Paused       bool         `json:"paused"`
-	UptimeSec    int64        `json:"uptime_sec"`
-	Captured     int64        `json:"captured"`
-	SkippedPause int64        `json:"skipped_paused"`
-	Routes       []string     `json:"routes"`
-	Ingest       ingest.Stats `json:"ingest"`
+	Version      string         `json:"version"`
+	PID          int            `json:"pid"`
+	ListenAddr   string         `json:"listen_addr"`
+	IngestURL    string         `json:"ingest_url"`
+	APIKeyMasked string         `json:"api_key"`
+	HasAPIKey    bool           `json:"has_api_key"`
+	Paused       bool           `json:"paused"`
+	UptimeSec    int64          `json:"uptime_sec"`
+	Captured     int64          `json:"captured"`
+	SkippedPause int64          `json:"skipped_paused"`
+	Routes       []string       `json:"routes"`
+	Ingest       ingest.Stats   `json:"ingest"`
+	Desktop      *DesktopStatus `json:"desktop,omitempty"`
+}
+
+// ClaudeLogsPath is the local-only OTLP logs endpoint after the capability.
+const ClaudeLogsPath = "/__desktop/v1/logs"
+
+// DesktopStatus contains only safe, local accounting diagnostics.
+type DesktopStatus struct {
+	Pending   *int   `json:"pending,omitempty"`
+	Delivered *int   `json:"delivered,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // Options wires dependencies into the reverse proxy Server.
@@ -70,8 +81,11 @@ type Options struct {
 	Verbose       bool
 	OnShutdownReq func()
 	// OnReady is invoked by ListenAndServe after a successful bind, before serving.
-	OnReady func()
-	Now     func() time.Time
+	OnReady       func()
+	ClaudeLogs    http.Handler
+	OnPauseChange func(bool) error
+	DesktopStatus func() *DesktopStatus
+	Now           func() time.Time
 	// LocalKey is mandatory; it derives the inference capability prefix and
 	// the control credential. The zero key is rejected.
 	LocalKey localauth.Key
@@ -89,6 +103,10 @@ type Server struct {
 	verbose       bool
 	onShutdownReq func()
 	onReady       func()
+	claudeLogs    http.Handler
+	onPauseChange func(bool) error
+	desktopStatus func() *DesktopStatus
+	pauseMu       sync.Mutex
 	now           func() time.Time
 	sessionKey    [32]byte
 	localKey      localauth.Key
@@ -181,6 +199,9 @@ func New(opts Options) (*Server, error) {
 		verbose:       opts.Verbose,
 		onShutdownReq: opts.OnShutdownReq,
 		onReady:       opts.OnReady,
+		claudeLogs:    opts.ClaudeLogs,
+		onPauseChange: opts.OnPauseChange,
+		desktopStatus: opts.DesktopStatus,
 		now:           nowFn,
 		startedAt:     nowFn(),
 		listenAddr:    opts.Config.ListenAddr,
@@ -202,6 +223,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.cfg.ListenAddr, err)
 	}
+	defer ln.Close()
 	s.mu.Lock()
 	s.listenAddr = ln.Addr().String()
 	s.httpSrv = &http.Server{
@@ -228,13 +250,21 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-		return <-errCh
+		shutdownErr := shutdownHTTP(srv)
+		return errors.Join(<-errCh, shutdownErr)
 	case err := <-errCh:
+		return errors.Join(err, shutdownHTTP(srv))
+	}
+}
+
+func shutdownHTTP(srv *http.Server) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		_ = srv.Close()
 		return err
 	}
+	return nil
 }
 
 // Handler exposes Server as an http.Handler (also convenient for httptest).
@@ -274,6 +304,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"error":  "unknown_route",
 			"routes": s.cfg.SortedRouteNames(),
 		})
+		return
+	}
+
+	// The desktop namespace is reserved even when collection is disabled.
+	if routeName == "__desktop" {
+		if rest == ClaudeLogsPath && s.claudeLogs != nil {
+			s.claudeLogs.ServeHTTP(w, r)
+		} else {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+		}
 		return
 	}
 
@@ -595,20 +635,17 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, s.Status())
-	case "/_tmproxy/pause":
+	case "/_tmproxy/pause", "/_tmproxy/resume":
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
 			return
 		}
-		s.SetPaused(true)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "paused": true})
-	case "/_tmproxy/resume":
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		paused := r.URL.Path == "/_tmproxy/pause"
+		if err := s.setPaused(paused); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "desktop_pause_persistence_failed"})
 			return
 		}
-		s.SetPaused(false)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "paused": false})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "paused": paused})
 	case "/_tmproxy/flush":
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
@@ -641,6 +678,22 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
 
 // SetPaused toggles reporting pause state and persists it to config.json if Paths are set.
 func (s *Server) SetPaused(paused bool) {
+	_ = s.setPaused(paused)
+}
+
+func (s *Server) setPaused(paused bool) error {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	var desktopErr error
+	if s.onPauseChange != nil {
+		desktopErr = s.onPauseChange(paused)
+		if desktopErr != nil {
+			s.logger.Print("desktop: could not persist reporting pause state")
+			if !paused {
+				return desktopErr
+			}
+		}
+	}
 	s.paused.Store(paused)
 	if s.paths.ConfigDir != "" {
 		if diskCfg, err := config.LoadFile(s.paths); err == nil {
@@ -648,6 +701,7 @@ func (s *Server) SetPaused(paused bool) {
 			_ = config.Save(s.paths, diskCfg)
 		}
 	}
+	return desktopErr
 }
 
 // Status returns the current runtime status snapshot.
@@ -670,6 +724,10 @@ func (s *Server) Status() StatusSnapshot {
 		u, _ := url.Parse(s.cfg.IngestURL)
 		ingestOrigin = u.Scheme + "://" + u.Host
 	}
+	var desktop *DesktopStatus
+	if s.desktopStatus != nil {
+		desktop = s.desktopStatus()
+	}
 	return StatusSnapshot{
 		Version:      config.Version,
 		PID:          os.Getpid(),
@@ -683,6 +741,7 @@ func (s *Server) Status() StatusSnapshot {
 		SkippedPause: s.skippedPause.Load(),
 		Routes:       s.cfg.SortedRouteNames(),
 		Ingest:       ingStats,
+		Desktop:      desktop,
 	}
 }
 
