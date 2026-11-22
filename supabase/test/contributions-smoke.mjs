@@ -162,7 +162,7 @@ try {
   ]);
   assert.equal(Number((await totals()).total_tokens),525);
   assert.equal((await totals()).has_estimated_cost,true);
-  assert.equal((await totals()).subagent_tokens,null,'unknown attribution cannot create an exact main-only total');
+  assert.equal(Number((await totals()).subagent_tokens),11,'unclassified usage counts as main, so the main-only total stays exact');
   // Member reads work; no client writes or access to staged payloads/RPC.
   await db.exec(`set role authenticated; set request.jwt.claim.sub='${uid}';`);
   assert.equal((await db.query('select * from public.leaderboard_all_time()')).rows.length,1);
@@ -172,14 +172,16 @@ try {
   const attributedUsage = async (source, ...args) => (await db.query(
     `select ${attributionFields} from public.${source} where user_id=$1`, [uid,...args],
   )).rows[0];
-  assert.deepEqual(await attributedUsage('leaderboard_all_time()'),attribution(525,null,11,501),
+  assert.deepEqual(await attributedUsage('leaderboard_all_time()'),attribution(525,11,11,514),
     'all-time includes history, past rollups, and today’s raw events only once');
-  assert.deepEqual(await attributedUsage('leaderboard_since($2)',cutoff),attribution(151,null,11,127),
+  assert.deepEqual(await attributedUsage('leaderboard_since($2)',cutoff),attribution(151,11,11,140),
     'since includes older post-cutoff collector usage, but not older raw OMP events or rollups');
-  assert.deepEqual(await attributedUsage('leaderboard()'),attribution(31,null,11,7),
-    'the default week wrapper retains strict nulls and returns only in-window classified tokens');
-  assert.deepEqual(await attributedUsage('leaderboard_since($2)',attributionCutoff),attribution(13,null,0,0),
-    'unclassified positive tokens contribute to the total but to neither classified count');
+  assert.deepEqual(await attributedUsage('leaderboard()'),attribution(31,11,11,20),
+    'the default week wrapper returns only in-window tokens');
+  assert.deepEqual(await attributedUsage('leaderboard_since($2)',attributionCutoff),attribution(13,0,0,13),
+    'unclassified tokens count as main');
+  assert.deepEqual((await db.query('select is_subagent from public.recent_activity($1) where total_tokens=13',[uid])).rows,
+    [{is_subagent:false}],'Activity shows an unclassified collector call as main');
   const grants = (await db.query("select has_table_privilege('authenticated','public.collector_contributions','insert') writes,has_function_privilege('authenticated','public.publish_contributions(text,jsonb)','execute') rpc")).rows[0];
   assert.equal(grants.writes,false); assert.equal(grants.rpc,false);
   assert.equal((await db.query("select has_table_privilege('authenticated','private.contribution_retirements','select') readable")).rows[0].readable,false);
@@ -190,7 +192,7 @@ try {
   await db.exec('set role tokenmunchers_discord_reader;');
   const bot = (await db.query("select * from public.discord_leaderboard('all')")).rows[0];
   assert.equal(bot.cost_usd,null,'bot wrapper must preserve unknown cost');
-  assert.equal(bot.subagent_tokens,null,'bot wrapper must preserve unknown attribution');
+  assert.equal(Number(bot.subagent_tokens),11,'bot wrapper counts unclassified usage as main');
   assert.equal((await db.query("select has_table_privilege('tokenmunchers_discord_reader','public.collector_contributions','select') readable")).rows[0].readable,false);
   await db.exec('reset role;');
   // Large staged snapshot: begin + 59 chunks spend one whole shared minute (60 requests x 10 of 600 hits).

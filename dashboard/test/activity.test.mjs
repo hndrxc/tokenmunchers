@@ -30,7 +30,7 @@ function collectorCall(id, source, ts) {
     cache_write_tokens: null,
     total_tokens: null,
     cost_usd: null,
-    is_subagent: null,
+    is_subagent: false,
   };
 }
 

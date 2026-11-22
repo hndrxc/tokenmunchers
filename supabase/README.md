@@ -101,6 +101,8 @@ The [munch desktop pilot](../proxy/README.md#desktop-accounting-pilot) posts eli
 
 `recent_activity` reads committed contributions directly without a second ledger. It excludes historical, reconstructed, scoped-identity and superseded rows, and explicitly applies the UTC cutoff (start of UTC day today−8) only to collector activity, without expiring contributions from the ledger. Ingest activity relies on the existing `usage_events` retention policy. The dashboard polls it roughly every 30 seconds; the collector table isn't published through Realtime and contributions don't create **Live now** presence. Ingest activity still streams over Realtime.
 
+An observation may publish `is_subagent: null` when its source can't tell main from subagent usage; munch desktop collection always does. The stored observation keeps the null, but leaderboards, daily totals and `recent_activity` count such calls as main.
+
 Each request includes `device_id` (stable source-isolated UUID), `harness` (`claude-code` or `codex`) and `snapshot_id` (UUID retained across exact retries). The first begin registers an immutable source cutoff and harness; another cutoff/harness for that device returns `409 cutoff_conflict`.
 
 ```jsonc

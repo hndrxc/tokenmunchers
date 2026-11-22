@@ -161,10 +161,9 @@ export function dailyByUser(
 ): Record<string, Record<string, number | null>> {
   const out: Record<string, Record<string, number | null>> = {};
   for (const r of rows) {
-    if (r.day >= todayKey || (!includeSubagents && r.is_subagent === true)) continue;
+    if (r.day >= todayKey || (!includeSubagents && r.is_subagent)) continue;
     const u = (out[r.user_id] ??= {});
-    const value = !includeSubagents && r.is_subagent === null ? null : r.total_tokens;
-    u[r.day] = addNullable(Object.hasOwn(u, r.day) ? u[r.day] : 0, value);
+    u[r.day] = addNullable(Object.hasOwn(u, r.day) ? u[r.day] : 0, r.total_tokens);
   }
   for (const [uid, t] of Object.entries(today)) {
     (out[uid] ??= {})[todayKey] = metricOf(t, "tokens", includeSubagents);

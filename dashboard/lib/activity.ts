@@ -13,7 +13,7 @@ export interface ActivityCall {
   cache_write_tokens: number | null;
   total_tokens: number | null;
   cost_usd: number | null;
-  is_subagent: boolean | null;
+  is_subagent: boolean;
 }
 
 export function activityFromIngest(event: UsageEvent): ActivityCall {

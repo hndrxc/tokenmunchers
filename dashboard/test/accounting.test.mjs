@@ -19,12 +19,12 @@ test('unknown values survive normalization, aggregate additions and live OMP upd
   assert.equal(metricOf({...unknown,total_tokens:100,subagent_tokens:null},'tokens',false),null);
   assert.equal(metricOf(undefined,'tokens',true),0);
 });
-test('daily aggregation propagates missing counts and unknown main/subagent attribution',()=>{
+test('daily aggregation propagates missing counts and drops subagent rows from main only',()=>{
   const base={user_id:'user',day:'2026-01-01',is_subagent:false,total_tokens:100};
   const all=dailyByUser([base,{...base,total_tokens:null}],{},true,'2026-01-03');
   assert.equal(all.user['2026-01-01'],null);
-  const main=dailyByUser([{...base,is_subagent:null}],{},false,'2026-01-03');
-  assert.equal(main.user['2026-01-01'],null);
+  const main=dailyByUser([base,{...base,is_subagent:true,total_tokens:40}],{},false,'2026-01-03');
+  assert.equal(main.user['2026-01-01'],100);
   assert.equal(dailyByUser([base],{},true,'2026-01-03').user['2026-01-01'],100);
 });
 test('unknown formatters never display zero while genuine zero stays numeric',()=>{

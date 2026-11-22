@@ -64,7 +64,7 @@ export interface DailyRow extends AccountingQuality, Spend {
   day: string;
   provider: string;
   model: string;
-  is_subagent: boolean | null;
+  is_subagent: boolean;
   call_count: number | null;
   total_tokens: number | null;
   cost_usd: number | null;
