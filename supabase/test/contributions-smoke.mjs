@@ -202,5 +202,152 @@ try {
   assert.equal(Number((await totals()).total_tokens),beforeBurst+59*120);
   await db.query('update public.api_keys set revoked_at=now() where key_hash=$1',[hash]);
   assert.equal((await request('commit',first)).error,'invalid_key');
+
+  // Separate member/key after the rate-limit scenario; freeze the UTC day across the
+  // raw-event and daily-rollup assertions, even if the smoke run crosses midnight.
+  await db.exec('begin');
+  const profile = randomUUID(), desktop = randomUUID(), event = randomUUID();
+  const activityHash = createHash('sha256').update('synthetic-activity-key').digest('hex');
+  await db.query("insert into public.allowlist(email) values('activity-smoke@example.invalid')");
+  await db.query("insert into auth.users(id,email) values($1,'activity-smoke@example.invalid')", [profile]);
+  await db.query("insert into public.api_keys(user_id,key_hash,key_prefix) values($1,$2,'test')", [profile,activityHash]);
+  const timestamp = new Date((await db.query('select now() as ts')).rows[0].ts).toISOString();
+  const day = timestamp.slice(0,10);
+  const activityRequest = async (action, snapshot_id, extra = {}) => {
+    const { rows } = await db.query('select public.publish_contributions($1,$2::jsonb) result', [
+      activityHash, JSON.stringify({ action,snapshot_id,device_id:desktop,harness:'codex',...extra }),
+    ]);
+    assert.equal(rows[0].result.ok,true,JSON.stringify(rows[0].result));
+    return rows[0].result;
+  };
+  const stageActivity = async (observations, extra = {}) => {
+    const sid = randomUUID();
+    await activityRequest('begin',sid,{cutoff:timestamp,chunk_count:1});
+    await activityRequest('chunk',sid,{index:0,observations,...extra});
+    return sid;
+  };
+  const exact = observation('activity-private-canonical',{
+    timestamp,provider:'omp',model:'mixed-model',session_id:'activity-private-session',
+    parent_session_id:'activity-private-parent',input_tokens:100,output_tokens:20,
+    cache_read_tokens:4,cache_write_tokens:2,
+  });
+  const activity = async (...args) => (await db.query(
+    args.length ? 'select * from public.recent_activity($1)' : 'select * from public.recent_activity()', args,
+  )).rows;
+  const asMember = () => db.exec(`set role authenticated; set request.jwt.claim.sub='${uid}';`);
+  const spendFields = `cost_usd::float8, known_cost_usd::float8, unpriced_tokens::int,
+    has_unknown_cost, has_estimated_cost`;
+  const spend = (cost_usd,known_cost_usd,unpriced_tokens,has_unknown_cost,has_estimated_cost = false) =>
+    ({cost_usd,known_cost_usd,unpriced_tokens,has_unknown_cost,has_estimated_cost});
+  const allTimeSpend = async () => (await db.query(
+    `select ${spendFields} from public.leaderboard_all_time() where user_id=$1`, [profile],
+  )).rows[0];
+  const sinceSpend = async () => (await db.query(
+    `select ${spendFields} from public.leaderboard_since($1::date::timestamp at time zone 'utc') where user_id=$2`,
+    [day,profile],
+  )).rows[0];
+  const weekSpend = async () => (await db.query(
+    `select ${spendFields} from public.leaderboard(7) where user_id=$1`, [profile],
+  )).rows[0];
+  const dailySpend = async model => (await db.query(
+    `select ${spendFields} from public.usage_daily_all where user_id=$1 and day=$2 and model=$3`,
+    [profile,day,model],
+  )).rows[0];
+
+  const exactSnapshot = await stageActivity([exact]);
+  await asMember();
+  assert.deepEqual(await activity(profile),[],'staging a live request does not publish it');
+  assert.equal(await allTimeSpend(),undefined,'staging is not usage and must not report measured zero');
+  await db.exec('reset role');
+  const ack = await activityRequest('commit',exactSnapshot);
+  assert.equal(ack.committed,true);
+  assert.equal(ack.accepted,1);
+  await asMember();
+  assert.deepEqual((await activity(profile)).map(r=>r.model),['mixed-model'],'acknowledged live request appears immediately');
+  const allUnpriced = spend(null,null,126,true);
+  assert.deepEqual(await allTimeSpend(),allUnpriced);
+  assert.deepEqual(await sinceSpend(),allUnpriced);
+  assert.deepEqual(await weekSpend(),allUnpriced);
+  assert.deepEqual(await dailySpend('mixed-model'),allUnpriced);
+  await db.exec('reset role');
+
+  await db.query(`insert into public.usage_events(event_id,user_id,session_id,ts,provider,model,input_tokens,cost_usd)
+    values($1,$2,'activity-private-omp-session',$3,'omp','mixed-model',7,1.25)`,[event,profile,timestamp]);
+  await db.query(`insert into public.usage_daily(user_id,day,provider,model,is_subagent,call_count,input_tokens,total_tokens,cost_usd)
+    values($1,$2,'omp','mixed-model',false,1,7,7,1.25)`,[profile,day]);
+  const fallbackLive = observation('activity-fallback',{timestamp,model:'superseded-model',identity_strength:'request'});
+  const retiredLive = {
+    ...weak,canonical_id:'activity-retired',timestamp,interval_start:timestamp,interval_end:timestamp,model:'retired-model',
+  };
+  const seed = await stageActivity([
+    observation('activity-history',{model:'history-model',cost_usd:5,cost_basis:'estimated'}),
+    observation('activity-recent-history',{
+      timestamp:new Date(Date.parse(timestamp)-1000).toISOString(),
+      model:'recent-history-model',cost_usd:0,cost_basis:'reported',
+    }),
+    fallbackLive,retiredLive,
+    observation('activity-scoped',{timestamp,model:'zero-model',identity_strength:'scoped',cost_usd:0,cost_basis:'reported'}),
+  ]);
+  assert.equal((await activityRequest('commit',seed)).accepted,5);
+  const upgrade = await stageActivity([exact],{
+    identity_aliases:[{from:fallbackLive.canonical_id,to:exact.canonical_id}],
+    superseded_canonical_ids:[retiredLive.canonical_id],
+  });
+  assert.equal((await activityRequest('commit',upgrade)).accepted,1);
+  await asMember();
+  // Today's OMP rollup is not counted twice, and older priced collector history
+  // contributes to all-time but not to either of the restricted periods.
+  const mixed = spend(null,1.25,126,true);
+  assert.deepEqual(await allTimeSpend(),spend(null,6.25,126,true,true));
+  assert.deepEqual(await sinceSpend(),mixed);
+  assert.deepEqual(await weekSpend(),mixed);
+  assert.deepEqual(await dailySpend('mixed-model'),mixed);
+  assert.deepEqual(await dailySpend('zero-model'),spend(0,0,0,false),'measured zero remains priced');
+  await db.exec('reset role');
+
+  const reconstructed = await stageActivity([{
+    ...retiredLive,canonical_id:'activity-reconstruction',identity_strength:'request',model:'unknown-token-model',
+  }]);
+  assert.equal((await activityRequest('commit',reconstructed)).accepted,1);
+  await stageActivity([observation('activity-staged',{timestamp,model:'staged-model'})]);
+
+  await asMember();
+  assert.deepEqual(await dailySpend('unknown-token-model'),spend(null,null,null,true));
+  assert.deepEqual(await sinceSpend(),spend(null,1.25,null,true),'unknown unpriced token count propagates without erasing priced spend');
+  assert.deepEqual(await weekSpend(),spend(null,1.25,null,true));
+  assert.deepEqual(await allTimeSpend(),spend(null,6.25,null,true,true));
+  const recent = (await activity(profile)).sort((a,b)=>a.source.localeCompare(b.source));
+  assert.equal(recent.length,2,'history, staged, superseded, retired, scoped, and reconstructed rows stay out of Activity');
+  const [collectorCall,ingestCall] = recent;
+  const commonActivity = {user_id:profile,ts:timestamp,provider:'omp',model:'mixed-model',is_subagent:false};
+  const normalizeActivity = ({id,...row}) => ({
+    ...row,ts:new Date(row.ts).toISOString(),
+    ...Object.fromEntries(['input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','total_tokens','cost_usd']
+      .map(key=>[key,row[key] === null ? null : Number(row[key])])),
+  });
+  assert.deepEqual(normalizeActivity(collectorCall),{
+    ...commonActivity,source:'codex',input_tokens:100,output_tokens:20,cache_read_tokens:4,cache_write_tokens:2,total_tokens:126,cost_usd:null,
+  });
+  assert.deepEqual(normalizeActivity(ingestCall),{
+    ...commonActivity,source:'ingest',input_tokens:7,output_tokens:0,cache_read_tokens:0,cache_write_tokens:0,total_tokens:7,cost_usd:1.25,
+  });
+  assert.equal(ingestCall.id,`ingest:${event}`);
+  assert.equal(typeof collectorCall.id,'string');
+  assert.ok(collectorCall.id.length > 0);
+  const exposed = JSON.stringify(recent,(_key,value)=>typeof value === 'bigint' ? String(value) : value);
+  for (const secret of [desktop,exactSnapshot,exact.canonical_id,exact.session_id,exact.parent_session_id,'activity-private-omp-session']) {
+    assert.ok(!exposed.includes(secret),`Activity must not expose ${secret}`);
+  }
+  assert.equal((await activity()).filter(r=>r.user_id === profile).length,2,'unfiltered Activity includes the selected profile');
+  const otherProfile = await activity(uid);
+  assert.ok(otherProfile.some(r=>r.source === 'ingest' && r.model === 'omp-model'));
+  assert.ok(otherProfile.every(r=>r.user_id === uid),'profile filter does not leak other profiles');
+  await db.exec(`set request.jwt.claim.sub='${randomUUID()}';`);
+  assert.deepEqual(await activity(),[]);
+  assert.deepEqual(await activity(profile),[]);
+  await db.exec('reset role; set role anon;');
+  await assert.rejects(activity(profile),{code:'42501'});
+  await db.exec('rollback');
+  console.log('PASS source-labelled recent Activity, member/privacy boundaries, and mixed-cost coverage across daily and period aggregates');
   console.log('PASS staged atomicity/replay/cleanup/staging limit/cutoff immutability/ownership/null rollups/supersession/aliases/stale snapshots/RLS grants/bot null semantics/rate-limit reset timing/revocation');
 } finally { await db.close(); }

@@ -10,7 +10,7 @@ Production project: `tokenmunchers` (`fywgkzqgtitpwijweojk`, us-east-2).
 OMP plugin ──POST /functions/v1/ingest──▶ ingest  ──rpc ingest()─────────▶ Postgres ──Realtime──▶ dashboard
            ──POST /functions/v1/history─▶ history ──rpc ingest_history()──┘   │
 munch ─────POST /functions/v1/ingest──────┘                                    ├─ pg_cron: rollups, retention, presence
-(earlier Claude Code/Codex uploads; no current client) ──POST /functions/v1/contributions─▶ contributions ──rpc publish_contributions()─┘
+munch desktop ──POST /functions/v1/contributions─▶ contributions ──rpc publish_contributions()─▶ Postgres
 ```
 
 - The Edge Functions check every field of a request against an allowlist and hash the API key. They then call `security definer` functions with the secret key. No client role can write usage data.
@@ -25,11 +25,11 @@ munch ─────POST /functions/v1/ingest──────┘             
 | `allowlist` | Invited emails. Sign-up is rejected unless the email is listed. | Managed by hand |
 | `profiles` | Handle, display name, avatar. Created by a trigger on sign-up. | Until account deletion |
 | `api_keys` | SHA-256 hash and a display prefix. The plaintext `tm_…` key is shown once, when created. | Until revoked or deleted |
-| `usage_events` | One row per reported model call. The OMP plugin reports calls from inside OMP; `munch` reports supported calls routed through its local proxy. Feeds Realtime, the activity feed, and the today/week totals. | Until the start of UTC day today−8 |
+| `usage_events` | One row per reported ingest call. The OMP plugin reports calls from inside OMP; `munch` reports supported calls routed through its local proxy. Feeds Realtime, the activity feed, and the today/week totals. | Until the start of UTC day today−8 |
 | `usage_daily` | Daily totals per user, provider, model and subagent flag, computed from `usage_events` | Forever |
 | `usage_history` | Imported pre-install daily totals per user and device (`/munch backfill`) | Forever (each upload replaces that device's previous one) |
 | `collector_contributions` | Permanently owned Claude Code/Codex canonical metadata, nullable accounting, history/live partition and supersession reservations | Until account deletion; source cleanup never deletes accepted rows |
-| `usage_daily_all` (view) | OMP `usage_daily` + `usage_history` + published collector contributions, with unknown-propagating sums and quality flags | n/a |
+| `usage_daily_all` (view) | OMP `usage_daily` + `usage_history` + published collector contributions, with unknown-propagating sums, spend coverage and quality flags | n/a |
 | `live_sessions` | Presence. A user is live if a heartbeat arrived in the last 90 s. | Pruned after 10 min |
 
 Deleting an account cascades to every row the user owns.
@@ -51,6 +51,7 @@ The Discord bot operates under a dedicated, read-only role (`tokenmunchers_disco
 | --- | --- | --- |
 | `leaderboard_since(timestamptz)` | Members | OMP raw events (up to 7 days back) plus collector contributions since the original timestamp |
 | `leaderboard_all_time()` | Members | OMP history, past daily rollups and today's raw events, plus published collector contributions once |
+| `recent_activity(p_user_id uuid default null)` | Members | Newest 50 calls across members or newest 25 for the specified member, combining ingest events and committed live exact Claude Code/Codex requests labeled by source |
 | `create_api_key(label)` | Members | Creates a key and returns its plaintext once |
 | `delete_my_account()` | Members | Deletes the caller's auth user (cascades) |
 | `ingest(key_hash, events)` | `service_role` | Stores usage events, updates presence, applies the rate limit |
@@ -96,7 +97,9 @@ A row has `day`, `provider`, `model`, `is_subagent`, `call_count`, the four toke
 
 ### `POST /functions/v1/contributions`
 
-The collector that used to upload Claude Code and Codex usage through this endpoint no longer exists, and no client currently posts to it. The endpoint and protocol remain for usage that was already uploaded and for possible future use; that earlier work stays visible in the views because the `collector_contributions` tables are retained in Postgres, so reading it doesn't depend on this endpoint being deployed. Claude Code and Codex are now reported live through `munch` and `ingest`. Keep deploying the migrations and function with the rest of the backend to preserve upload capability for the retained protocol.
+The [munch desktop pilot](../proxy/README.md#desktop-accounting-pilot) posts eligible local Claude Code and Codex requests to this endpoint. The same contribution ledger retains previously published usage; reading it doesn't depend on the endpoint being deployed. Proxy-routed calls use `ingest` instead.
+
+`recent_activity` reads committed contributions directly without a second ledger. It excludes historical, reconstructed, scoped-identity and superseded rows, and explicitly applies the UTC cutoff (start of UTC day today−8) only to collector activity, without expiring contributions from the ledger. Ingest activity relies on the existing `usage_events` retention policy. The dashboard polls it roughly every 30 seconds; the collector table isn't published through Realtime and contributions don't create **Live now** presence. Ingest activity still streams over Realtime.
 
 Each request includes `device_id` (stable source-isolated UUID), `harness` (`claude-code` or `codex`) and `snapshot_id` (UUID retained across exact retries). The first begin registers an immutable source cutoff and harness; another cutoff/harness for that device returns `409 cutoff_conflict`.
 
@@ -123,7 +126,7 @@ Each request includes `device_id` (stable source-isolated UUID), `harness` (`cla
 
 ### Nullable totals and accounting quality
 
-Unknown is absorbing in daily totals and all leaderboard sums: a missing output/cost/call count is `null`, not zero or a silently partial sum. Quality flags are `has_unknown_tokens`, `has_unknown_cost`, `has_unknown_calls`, `has_estimated_cost`, `has_reconstructed`. Known OMP rows retain their numeric behavior; imported OMP history cost is marked estimated. Collector estimated USD is not an invoice; reconstructed intervals are not fabricated calls. The dashboard displays unknown values without ranking them and marks estimates/reconstruction. The bot preserves null totals and explains the same limitations. OMP activity/presence remain separate: collector publication updates aggregate views, not fake OMP events or heartbeats.
+Unknown is absorbing in the existing daily and leaderboard totals: a missing output/cost/call count is `null`, not zero or a silently partial sum. Quality flags are `has_unknown_tokens`, `has_unknown_cost`, `has_unknown_calls`, `has_estimated_cost`, `has_reconstructed`. `usage_daily_all` and the member leaderboard RPCs also return `known_cost_usd` (sum of priced rows, `null` if no rows were priced, with actual zero retained) and `unpriced_tokens` (zero if none are unpriced, `null` if any unpriced row has an unknown token count). The dashboard shows known spend with unpriced token coverage and **Unknown** for all-unpriced usage, with estimates labeled separately. Imported OMP history cost is marked estimated, and collector estimated USD is not an invoice. Reconstructed intervals are not fabricated calls. The Discord contract still uses its existing strict totals.
 
 ### Parent-run validation and database smoke
 
@@ -243,6 +246,7 @@ supabase functions deploy ingest history contributions
 ```
 
 Deploy server changes **before** publishing a plugin version that depends on them.
+Apply the database migrations **before** deploying a dashboard that uses `recent_activity` and spend coverage. This change does not include a production deployment.
 
 If `supabase migration list` shows versions that don't match the local file names (for example, migrations applied by hand in the SQL editor), fix the history table with `supabase migration repair --status applied|reverted <version>` before pushing. This only edits the history table and never runs SQL.
 

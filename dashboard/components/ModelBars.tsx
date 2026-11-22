@@ -1,10 +1,10 @@
-import { model, tokens, usd } from "@/lib/format";
+import { model, spendNote, tokens, usd } from "@/lib/format";
+import type { Spend } from "@/lib/types";
 
-export interface ModelShare {
+export interface ModelShare extends Spend {
   provider: string;
   model: string;
   total_tokens: number | null;
-  cost_usd: number | null;
   calls: number | null;
 }
 
@@ -16,7 +16,7 @@ export function ModelBars({ rows, totalTokens }: { rows: ModelShare[]; totalToke
   return (
     <div role="table" aria-label="Tokens by model">
       {rows.map((r) => (
-        <div className="hbar-row" role="row" key={`${r.provider}/${r.model}`} title={`${r.provider} · ${r.calls === null ? "Unknown" : r.calls} calls · ${usd(r.cost_usd)}`}>
+        <div className="hbar-row" role="row" key={`${r.provider}/${r.model}`} title={`${r.calls === null ? "Unknown" : r.calls} calls`}>
           <span className="name" role="cell">
             {model(r.model)} <span className="sub">{r.provider}</span>
           </span>
@@ -25,6 +25,8 @@ export function ModelBars({ rows, totalTokens }: { rows: ModelShare[]; totalToke
           </span>
           <span className="num" role="cell">
             {tokens(r.total_tokens)} {r.total_tokens !== null && total !== null && total > 0 && <span className="sub">{Math.round((r.total_tokens / total) * 100)}%</span>}
+            <br />
+            <span className="sub">{[r.known_cost_usd === null ? "Unknown" : `${usd(r.known_cost_usd)} known spend`, spendNote(r)].filter(Boolean).join(" · ")}</span>
           </span>
         </div>
       ))}

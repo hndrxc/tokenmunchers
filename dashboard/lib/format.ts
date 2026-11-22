@@ -1,3 +1,5 @@
+import type { Spend } from "./types";
+
 export function tokens(n: number | null): string {
   if (n === null) return "Unknown";
   if (n >= 1e9) return `${trim(n / 1e9)}B`;
@@ -16,6 +18,17 @@ export function usd(n: number | null): string {
   if (n < 0.01) return "<$0.01";
   if (n >= 1000) return `$${Math.round(n).toLocaleString("en-US")}`;
   return `$${n.toFixed(2)}`;
+}
+
+export function spendNote(spend: Spend): string {
+  const notes = [];
+  if (spend.unpriced_tokens !== null && spend.unpriced_tokens > 0) {
+    notes.push(`${tokens(spend.unpriced_tokens)} tokens unpriced`);
+  } else if (spend.has_unknown_cost || spend.unpriced_tokens === null) {
+    notes.push("some usage unpriced");
+  }
+  if (spend.has_estimated_cost) notes.push("includes estimates");
+  return notes.join(" · ");
 }
 
 export function ago(iso: string, now: number): string {

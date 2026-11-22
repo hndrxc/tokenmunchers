@@ -20,12 +20,12 @@ All reads run as the signed-in user, with row-level security (RLS) applied. The 
 
 | Data | Source |
 | --- | --- |
-| Today / this week totals | `leaderboard_since(timestamptz)`, over raw call events plus earlier Claude Code/Codex contributions |
-| All-time totals | `leaderboard_all_time()`: imported history, past daily totals and today's raw events, plus earlier Claude Code/Codex contributions once |
-| Charts, streaks, model mix | `usage_daily_all` view (daily totals + imported history + earlier Claude Code/Codex contributions) |
-| Activity feed, recent calls | `usage_events` |
+| Today / this week totals | `leaderboard_since(timestamptz)`, over raw call events plus published Claude Code/Codex contributions |
+| All-time totals | `leaderboard_all_time()`: imported history, past daily totals and today's raw events, plus published Claude Code/Codex contributions once |
+| Charts, streaks, model mix | `usage_daily_all` view (daily totals + imported history + published Claude Code/Codex contributions) |
+| Activity feed, recent calls | `recent_activity`, over ingest events and eligible committed contributions |
 | Live now | `live_sessions` (a heartbeat in the last 90 s) |
-| Live updates | Supabase Realtime for call events and presence; an aggregate refresh every 30 seconds |
+| Live updates | Supabase Realtime for ingest call events and presence; Activity contributions and totals refresh every 30 seconds |
 
 The database is documented in the [Supabase README](../supabase/README.md).
 
@@ -33,13 +33,13 @@ The leaderboard's period picker selects what each column shows and also drives e
 
 ## Claude Code and Codex
 
-Claude Code and Codex are reported live by [munch](../proxy/README.md), the same way as other tools, so their calls appear in the activity feed and under Live now. Only calls routed through the munch proxy are captured — anything on the machine that doesn't go through it isn't seen. Settings has the setup steps, and the [proxy README](../proxy/README.md) documents munch itself. Importing Claude Code/Codex history from disk isn't available at the moment.
+[Munch](../proxy/README.md) reports supported proxy-routed calls through ingest. The opt-in desktop pilot reports eligible first-party local Claude Code and Codex requests through the existing contributions endpoint instead. Once committed, live exact requests appear in **Activity** and member recent calls with **Claude Code** or **Codex** badges. The badges identify the harness, not necessarily the desktop app. Contributions arrive on the next poll (roughly every 30 seconds) and don't create **Live now** presence; ingest updates still arrive over Realtime.
 
-Usage that the former Claude Code/Codex collector already uploaded stays counted in the leaderboards and charts, and nothing new arrives through that path. That earlier work remains visible because the `collector_contributions` tables and the views over them are retained in Postgres; reading them doesn't depend on the `contributions` Edge Function being deployed. Deploy both the collector migrations and the `contributions` Edge Function with the rest of the backend to support future uploads; see the [backend notes](../supabase/README.md#post-functionsv1contributions).
+Activity reads the existing ledger and does not show historical, reconstructed, scoped-identity or superseded contributions. Both sources share the ingest feed's UTC retention horizon and are capped together at the newest 50 calls on the home page or newest 25 for a member. Previously published usage still contributes to totals where eligible, even after it ages out of Activity. Strong canonical IDs are owned once per user/harness across devices, and accepted contributions survive source cleanup. Source logs are not complete billing ledgers.
 
-Unavailable output, calls or USD are shown as **Unknown**, never zero, and unavailable leaderboard metrics are unranked. Null is absorbing in group totals, daily charts and model mix. Unknown chart days have `?` markers (and explicit table values); muted sparkline bars indicate unavailable days, not measured usage. Cost estimates and reconstructed usage are labeled; neither reconstructed intervals nor session summaries become invented calls. A day with recorded usage can establish activity even when its total is unavailable; “Biggest day” remains unknown if any daily total is unavailable.
+For mixed usage, the dashboard shows known spend alongside unpriced token coverage. When there is usage but none of it is priced, spend is **Unknown**, not $0; an actual reported zero remains zero. The dashboard labels estimates separately and indicates when the unpriced token count itself is unknown.
 
-Earlier contributions don't create live presence or activity-feed entries. Strong canonical IDs are owned once per user/harness across devices, and previously accepted contributions survive source cleanup. Source logs were not complete billing ledgers.
+Unavailable token and call counts are shown as **Unknown**, never zero, and unavailable leaderboard metrics are unranked. Unknown token counts propagate in group totals, daily charts and model mix. Unknown chart days have `?` markers (and explicit table values); muted sparkline bars indicate unavailable days, not measured usage. Reconstructed usage is labeled, not turned into invented calls. A day with recorded usage can establish activity even when its total is unavailable; “Biggest day” remains unknown if any daily total is unavailable.
 
 
 ## Local development
@@ -59,6 +59,8 @@ npm run typecheck
 For sign-in to work locally, `http://localhost:3000/**` must be in the Supabase project's redirect URLs (see [Supabase setup](../supabase/README.md#project-setup)).
 
 ## Deploying
+
+Apply the [Supabase migrations](../supabase/README.md#deploying) before deploying this dashboard version: it expects the Activity RPC and spend coverage fields. This change does not include a production deployment.
 
 The dashboard is a standard Next.js app. To deploy on Vercel:
 
