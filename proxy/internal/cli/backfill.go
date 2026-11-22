@@ -14,17 +14,19 @@ import (
 	"github.com/tokenmunchers/tokenmunchers/proxy/internal/backfill"
 	"github.com/tokenmunchers/tokenmunchers/proxy/internal/codex"
 	"github.com/tokenmunchers/tokenmunchers/proxy/internal/config"
+	"github.com/tokenmunchers/tokenmunchers/proxy/internal/desktop"
 )
 
 const backfillUsage = `Usage: munch backfill [flags]
 
 Preview retained Codex rollout history for backfill reporting. By default this
-prints a local preview only: nothing is read except the Codex root, and nothing
-is written or uploaded. --from and --before must both be set to an explicitly
-verified interval in RFC3339 UTC (at most millisecond precision, not future,
-from < before) covering this source, all included archives, and both ChatGPT
-and API-key routes; without them no upload is allowed. --upload uploads after
-an interactive confirmation that defaults to no; there is no --yes bypass.
+prints a local preview only: it reads the Codex root, Munch config and desktop
+collector ledger, and does not write or upload. --from and --before must both
+be set to an explicitly verified interval in RFC3339 UTC (at most millisecond
+precision, not future, from < before) covering this source, all included
+archives, and both ChatGPT and API-key routes; without them no upload is allowed.
+--upload uploads after an interactive confirmation that defaults to no; there
+is no --yes bypass.
 `
 
 func (a *App) cmdBackfill(args []string) error {
@@ -55,7 +57,22 @@ func (a *App) cmdBackfill(args []string) error {
 	}
 	window, verified := parseVerifiedWindow(*fromStr, *beforeStr)
 
-	preview, err := backfill.Scan(context.Background(), root, window)
+	paths, err := resolvePaths(*cfgDir, *stateDir)
+	if err != nil {
+		return err
+	}
+	disk, err := config.LoadFile(paths)
+	if err != nil {
+		return err
+	}
+	recorded, err := desktop.RecordedCodexIDs(desktopDir(paths))
+	if err != nil {
+		return fmt.Errorf("read desktop ownership for backfill: %w", err)
+	}
+	// Reserve from activation even if the collector's persisted cutoff is
+	// later (for example after a clock change). Do not infer gaps from pauses.
+	ownership := backfill.DesktopOwnership{Since: disk.DesktopCodexSince, RecordedIDs: recorded}
+	preview, err := backfill.Scan(context.Background(), root, window, ownership)
 	if err != nil {
 		return err
 	}
@@ -86,10 +103,6 @@ func (a *App) cmdBackfill(args []string) error {
 		return nil
 	}
 
-	paths, err := resolvePaths(*cfgDir, *stateDir)
-	if err != nil {
-		return err
-	}
 	cfg, err := config.Load(paths)
 	if err != nil {
 		return err

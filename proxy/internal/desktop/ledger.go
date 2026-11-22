@@ -248,6 +248,37 @@ func (c *Collector) replay(entry ledgerEntry) error {
 	return nil
 }
 
+// RecordedCodexIDs reads the collector ledger without taking its writer lock
+// or repairing it. Both pending and acknowledged observations remain owned.
+// Missing state is empty and invalid entries fail closed. An incomplete last
+// line is ignored, as the collector discards it on recovery: it may be an
+// append in progress, and a torn record was never queued for delivery.
+func RecordedCodexIDs(dir string) (map[string]struct{}, error) {
+	path := filepath.Join(dir, "ledger.jsonl")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errLedger
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, errLedger
+	}
+	defer f.Close()
+	c := &Collector{sources: make(map[string]*sourceLedger)}
+	// Read a fixed prefix even if the daemon keeps appending.
+	_, _, err = replayJournal(io.NewSectionReader(f, 0, info.Size()), c.replay)
+	if err != nil {
+		return nil, err
+	}
+	if s := c.sources[Codex]; s != nil {
+		return s.seen, nil
+	}
+	return nil, nil
+}
+
 func (s *sourceLedger) add(o Observation) {
 	s.seen[o.CanonicalID] = struct{}{}
 	s.queue = append(s.queue, o)
@@ -503,33 +534,39 @@ func openJournal(dir, name string, apply func(ledgerEntry) error) (*journal, err
 			return nil, errLedger
 		}
 	}
-	r := bufio.NewReaderSize(f, 512*1024)
-	var offset int64
-	for {
-		line, err := r.ReadSlice('\n')
-		if err == io.EOF {
-			if len(line) != 0 && (f.Truncate(offset) != nil || f.Sync() != nil) {
-				return nil, errLedger
-			}
-			break
-		}
-		if err != nil {
-			return nil, errLedger
-		}
-		var e ledgerEntry
-		if json.Unmarshal(line, &e) != nil {
-			return nil, errCorrupt
-		}
-		if err := apply(e); err != nil {
-			return nil, err
-		}
-		offset += int64(len(line))
+	offset, torn, err := replayJournal(f, apply)
+	if err != nil {
+		return nil, err
+	}
+	if torn && (f.Truncate(offset) != nil || f.Sync() != nil) {
+		return nil, errLedger
 	}
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		return nil, errLedger
 	}
 	ok = true
 	return &journal{file: f}, nil
+}
+
+func replayJournal(src io.Reader, apply func(ledgerEntry) error) (offset int64, torn bool, err error) {
+	r := bufio.NewReaderSize(src, 512*1024)
+	for {
+		line, err := r.ReadSlice('\n')
+		if err == io.EOF {
+			return offset, len(line) != 0, nil
+		}
+		if err != nil {
+			return offset, false, errLedger
+		}
+		var e ledgerEntry
+		if json.Unmarshal(line, &e) != nil {
+			return offset, false, errCorrupt
+		}
+		if err := apply(e); err != nil {
+			return offset, false, err
+		}
+		offset += int64(len(line))
+	}
 }
 
 func (j *journal) append(e ledgerEntry) error {

@@ -160,7 +160,7 @@ func (b *fileBuilder) writeRaw(t *testing.T, root, rel string, data []byte) stri
 
 func scanRoot(t *testing.T, root string, window Window) Preview {
 	t.Helper()
-	pv, err := Scan(context.Background(), root, window)
+	pv, err := Scan(context.Background(), root, window, DesktopOwnership{})
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -551,14 +551,14 @@ func TestScanEmptyAndMissingRoot(t *testing.T) {
 	wantExcluded(t, pv, map[string]int{})
 
 	// An empty root string is the missing default Codex home: empty success.
-	if pv, err := Scan(context.Background(), "", testWindow); err != nil {
+	if pv, err := Scan(context.Background(), "", testWindow, DesktopOwnership{}); err != nil {
 		t.Errorf("Scan on empty root: want no error, got %v", err)
 	} else if len(pv.Records) != 0 || len(pv.Excluded) != 0 {
 		t.Errorf("Scan on empty root = %+v, want empty", pv)
 	}
 
 	missing := filepath.Join(t.TempDir(), "nope")
-	if _, err := Scan(context.Background(), missing, testWindow); err == nil {
+	if _, err := Scan(context.Background(), missing, testWindow, DesktopOwnership{}); err == nil {
 		t.Errorf("Scan on missing root: want error, got nil")
 	}
 }
@@ -584,5 +584,44 @@ func TestScanFixtureRoot(t *testing.T) {
 	r := findRec(t, pv, "resp_10001")
 	if r.Model != "gpt-5-mini" || r.Provider != "openai" || r.Input != 850 || r.Output != 800 {
 		t.Errorf("resp_10001 = %+v", r)
+	}
+}
+
+func TestScanDesktopOwnership(t *testing.T) {
+	since := winFrom.Add(time.Hour)
+	for _, tc := range []struct {
+		name      string
+		offsets   []time.Duration
+		ownership DesktopOwnership
+		excluded  bool
+	}{
+		{name: "exact activation", offsets: []time.Duration{0}, ownership: DesktopOwnership{Since: since}, excluded: true},
+		{name: "one millisecond before", offsets: []time.Duration{-time.Millisecond}, ownership: DesktopOwnership{Since: since}},
+		{name: "recorded while now off", offsets: []time.Duration{-time.Millisecond}, ownership: DesktopOwnership{RecordedIDs: map[string]struct{}{"resp_owned": {}}}, excluded: true},
+		{name: "duplicate in another rollout", offsets: []time.Duration{0, 0}, ownership: DesktopOwnership{Since: since}, excluded: true},
+		{name: "earlier copy then collector copy", offsets: []time.Duration{-time.Millisecond, 0}, ownership: DesktopOwnership{Since: since}, excluded: true},
+		{name: "collector copy then earlier copy", offsets: []time.Duration{0, -time.Millisecond}, ownership: DesktopOwnership{Since: since}, excluded: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for i, offset := range tc.offsets {
+				id := string(rune('a' + i))
+				newFile().
+					add(ts(winFrom.Format(time.RFC3339)), nil, "session_meta", sessionMeta("thread", nil, nil, strp("openai"), nil, "cli")).
+					add(ts(since.Add(offset).Format("2006-01-02T15:04:05.000Z")), nil, "token_usage_record", record("resp_owned", "thread", "", usage(10, 0, nil, 10, 0, 20))).
+					write(t, root, "sessions/rollout-"+id+".jsonl")
+			}
+			pv, err := Scan(context.Background(), root, testWindow, tc.ownership)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.excluded {
+				wantIDs(t, pv, nil)
+				wantExcluded(t, pv, map[string]int{ExclDesktopCollected: 1})
+			} else {
+				wantIDs(t, pv, []string{"resp_owned"})
+				wantExcluded(t, pv, map[string]int{})
+			}
+		})
 	}
 }

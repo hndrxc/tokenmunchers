@@ -52,6 +52,7 @@ const (
 	ExclConflict              = "conflict"
 	ExclDuplicate             = "duplicate"
 	ExclOverlapMunch          = "overlap_munch"
+	ExclDesktopCollected      = "desktop_collected"
 	ExclWindowContradiction   = "window_contradiction"
 	ExclWithheldContradiction = "withheld_contradiction"
 	ExclMissingTimestamp      = "missing_timestamp"
@@ -85,6 +86,13 @@ type Window struct {
 // IsZero reports whether the window is the zero value.
 func (w Window) IsZero() bool { return w.From.IsZero() && w.Before.IsZero() }
 
+// DesktopOwnership reserves IDs already recorded by Munch's Codex desktop
+// collector, and timestamps at or after its current activation when enabled.
+type DesktopOwnership struct {
+	Since       time.Time
+	RecordedIDs map[string]struct{}
+}
+
 // Record is one observed, completed response: metadata only, never content.
 // SessionID is the record's thread_id; ParentSessionID is the owning thread's
 // parent (or fork origin) when known. Subagent is nil when unknown.
@@ -111,7 +119,7 @@ type Preview struct {
 // Scan returns the preview for window. An empty root (missing default Codex
 // home) is an empty successful preview. A zero window excludes modern
 // candidates as no_window while still counting legacy/diagnostic exclusions.
-func Scan(ctx context.Context, root string, window Window) (Preview, error) {
+func Scan(ctx context.Context, root string, window Window, desktop DesktopOwnership) (Preview, error) {
 	if root == "" {
 		return Preview{Excluded: map[string]int{}}, nil
 	}
@@ -121,7 +129,7 @@ func Scan(ctx context.Context, root string, window Window) (Preview, error) {
 	}
 	excl := make(map[string]int)
 	acct := &accounting{byID: make(map[string]*acctEntry), conflicts: make(map[string]bool)}
-	guard := &windowGuard{proxied: make(map[string]bool)}
+	guard := &windowGuard{proxied: make(map[string]bool), desktop: desktop}
 	for _, rel := range paths {
 		if err := ctx.Err(); err != nil {
 			return Preview{}, err
@@ -398,6 +406,8 @@ type fileState struct {
 
 // windowGuard tracks fail-closed window evidence across all files.
 type windowGuard struct {
+	desktop      DesktopOwnership
+	collected    map[string]bool
 	contradicted bool
 	proxied      map[string]bool
 }
@@ -700,6 +710,17 @@ func handleRecord(env *wireLine, ordinal uint64, ordOK bool, st *fileState, wind
 	if provider == "" {
 		provider = unknownProvider
 	}
+	if !guard.collected[p.ResponseID] {
+		_, recorded := guard.desktop.RecordedIDs[p.ResponseID]
+		if recorded || (!guard.desktop.Since.IsZero() && !ts.Before(guard.desktop.Since)) {
+			if guard.collected == nil {
+				guard.collected = make(map[string]bool)
+			}
+			guard.collected[p.ResponseID] = true
+			excl[ExclDesktopCollected]++
+		}
+	}
+	// Desktop ownership must not mask evidence contradicting the pre-proxy window.
 	if provider == munchChatgptProvider {
 		guard.proxied[p.ResponseID] = true
 		if prior := acct.byID[p.ResponseID]; prior != nil && prior.eligible {
@@ -713,6 +734,11 @@ func handleRecord(env *wireLine, ordinal uint64, ordOK bool, st *fileState, wind
 			return
 		}
 		excl[ExclOverlapMunch]++
+		return
+	}
+	if guard.collected[p.ResponseID] {
+		// A copy with a different timestamp must not reintroduce this ID.
+		delete(acct.byID, p.ResponseID)
 		return
 	}
 	if guard.proxied[p.ResponseID] {
