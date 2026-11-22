@@ -1,10 +1,38 @@
-import type { DailyRow, Totals, UsageEvent } from "./types";
+import type { DailyRow, Spend, Totals, UsageEvent } from "./types";
 
 export const LIVE_WINDOW_MS = 90_000;
 
 /** Unavailable is absorbing: adding a known value cannot repair an unknown total. */
 export function addNullable(a: number | null, b: number | null): number | null {
   return a === null || b === null ? null : Number(a) + Number(b);
+}
+
+function numberOrNull(value: number | null): number | null {
+  return value === null ? null : Number(value);
+}
+
+export function emptySpend(): Spend {
+  return { known_cost_usd: null, unpriced_tokens: 0 };
+}
+
+export function normalizeSpend(spend: Spend): Spend {
+  return {
+    known_cost_usd: numberOrNull(spend.known_cost_usd),
+    unpriced_tokens: numberOrNull(spend.unpriced_tokens),
+    has_unknown_cost: spend.has_unknown_cost,
+    has_estimated_cost: spend.has_estimated_cost,
+  };
+}
+
+export function combineSpend(a: Spend, b: Spend): Spend {
+  return {
+    known_cost_usd: a.known_cost_usd === null ? numberOrNull(b.known_cost_usd)
+      : b.known_cost_usd === null ? Number(a.known_cost_usd)
+      : Number(a.known_cost_usd) + Number(b.known_cost_usd),
+    unpriced_tokens: addNullable(a.unpriced_tokens, b.unpriced_tokens),
+    has_unknown_cost: a.has_unknown_cost || b.has_unknown_cost,
+    has_estimated_cost: a.has_estimated_cost || b.has_estimated_cost,
+  };
 }
 
 export function utcDay(d: Date | number = Date.now()): string {
@@ -33,18 +61,33 @@ export function emptyTotals(user_id: string): Totals {
     total_tokens: 0,
     subagent_tokens: 0,
     cost_usd: 0,
+    ...emptySpend(),
   };
 }
 
 export function byUser(rows: Totals[] | null): Record<string, Totals> {
   const out: Record<string, Totals> = {};
-  for (const r of rows ?? []) out[r.user_id] = { ...r, cost_usd: r.cost_usd === null ? null : Number(r.cost_usd) };
+  for (const r of rows ?? []) {
+    out[r.user_id] = {
+      ...r,
+      ...normalizeSpend(r),
+      call_count: numberOrNull(r.call_count),
+      input_tokens: numberOrNull(r.input_tokens),
+      output_tokens: numberOrNull(r.output_tokens),
+      cache_read_tokens: numberOrNull(r.cache_read_tokens),
+      cache_write_tokens: numberOrNull(r.cache_write_tokens),
+      total_tokens: numberOrNull(r.total_tokens),
+      subagent_tokens: numberOrNull(r.subagent_tokens),
+      cost_usd: numberOrNull(r.cost_usd),
+    };
+  }
   return out;
 }
 
 /** Returns a new map with the event folded into the user's totals. */
 export function addEvent(map: Record<string, Totals>, e: UsageEvent): Record<string, Totals> {
   const prev = map[e.user_id] ?? emptyTotals(e.user_id);
+  const cost = Number(e.cost_usd);
   return {
     ...map,
     [e.user_id]: {
@@ -56,14 +99,15 @@ export function addEvent(map: Record<string, Totals>, e: UsageEvent): Record<str
       cache_write_tokens: addNullable(prev.cache_write_tokens, e.cache_write_tokens),
       total_tokens: addNullable(prev.total_tokens, e.total_tokens),
       subagent_tokens: addNullable(prev.subagent_tokens, e.is_subagent ? e.total_tokens : 0),
-      cost_usd: addNullable(prev.cost_usd, Number(e.cost_usd)),
+      cost_usd: addNullable(prev.cost_usd, cost),
+      known_cost_usd: Number(prev.known_cost_usd ?? 0) + cost,
     },
   };
 }
 
 export function metricOf(t: Totals | undefined, metric: "tokens" | "cost", includeSubagents: boolean): number | null {
   if (!t) return 0;
-  if (metric === "cost") return t.cost_usd;
+  if (metric === "cost") return t.known_cost_usd;
   if (includeSubagents) return t.total_tokens;
   return t.total_tokens === null || t.subagent_tokens === null ? null : t.total_tokens - t.subagent_tokens;
 }

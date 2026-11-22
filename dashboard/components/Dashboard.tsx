@@ -7,11 +7,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar } from "@/components/Avatar";
 import { DailyBars } from "@/components/DailyBars";
 import { Sparkline } from "@/components/Sparkline";
-import { ago, duration, model, tokens, usd } from "@/lib/format";
-import { addEvent, addNullable, dailyByUser, LIVE_WINDOW_MS, metricOf, normalizeEvent, utcDay } from "@/lib/stats";
+import { activityFromIngest, activitySourceLabel, mergeActivity, type ActivityCall } from "@/lib/activity";
+import { ago, duration, model, spendNote, tokens, usd } from "@/lib/format";
+import { addEvent, addNullable, combineSpend, dailyByUser, emptySpend, LIVE_WINDOW_MS, metricOf, normalizeEvent, utcDay } from "@/lib/stats";
 import { createClient } from "@/lib/supabase/client";
 import { subscribeAuthed } from "@/lib/supabase/realtime";
-import type { DailyRow, LiveSession, Profile, Totals, UsageEvent } from "@/lib/types";
+import type { DailyRow, LiveSession, Profile, Totals } from "@/lib/types";
 
 type Period = "today" | "week" | "all";
 type Metric = "tokens" | "cost";
@@ -21,7 +22,7 @@ export interface DashboardProps {
   week: Record<string, Totals>;
   today: Record<string, Totals>;
   allTime: Record<string, Totals>;
-  feed: UsageEvent[];
+  feed: ActivityCall[];
   live: LiveSession[];
   daily: DailyRow[];
   days: string[];
@@ -29,16 +30,26 @@ export interface DashboardProps {
   serverNow: number;
 }
 
-const FEED_LIMIT = 50;
+type OptimisticActivity = { serverNow: number; calls: ActivityCall[] };
 
 export function Dashboard(props: DashboardProps) {
   const router = useRouter();
-  const [profiles, setProfiles] = useState<Record<string, Profile>>(() => Object.fromEntries(props.profiles.map((p) => [p.id, p])));
+  const [loadedProfiles, setLoadedProfiles] = useState<Record<string, Profile>>({});
+  const profiles = useMemo(
+    () => ({ ...loadedProfiles, ...Object.fromEntries(props.profiles.map((p) => [p.id, p])) }),
+    [loadedProfiles, props.profiles],
+  );
   const [week, setWeek] = useState(props.week);
   const [today, setToday] = useState(props.today);
   const [allTime, setAllTime] = useState(props.allTime);
-  const [feed, setFeed] = useState(props.feed);
-  const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const [optimisticActivity, setOptimisticActivity] = useState<OptimisticActivity>({ serverNow: props.serverNow, calls: [] });
+  const activitySnapshot = useRef({ serverNow: props.serverNow, feed: props.feed });
+  activitySnapshot.current = { serverNow: props.serverNow, feed: props.feed };
+  const recentIngest = useRef(new Set<string>());
+  // A refreshed snapshot replaces the feed; old optimistic calls must not refill it.
+  const realtimeCalls = optimisticActivity.serverNow === props.serverNow ? optimisticActivity.calls : null;
+  const feed = useMemo(() => mergeActivity(props.feed, realtimeCalls ?? []), [props.feed, realtimeCalls]);
+  const fresh = useMemo(() => new Set(realtimeCalls?.map((call) => call.id)), [realtimeCalls]);
   const [live, setLive] = useState<Record<string, LiveSession>>(() =>
     Object.fromEntries(props.live.map((s) => [`${s.user_id}:${s.session_id}`, s])),
   );
@@ -77,7 +88,7 @@ export function Dashboard(props: DashboardProps) {
   const ensureProfile = useCallback(async (userId: string) => {
     if (profilesRef.current[userId]) return;
     const { data } = await createClient().from("profiles").select("id,handle,display_name,avatar_url").eq("id", userId).maybeSingle();
-    if (data) setProfiles((p) => ({ ...p, [data.id]: data }));
+    if (data) setLoadedProfiles((p) => ({ ...p, [data.id]: data }));
   }, []);
 
   useEffect(() => {
@@ -86,13 +97,22 @@ export function Dashboard(props: DashboardProps) {
         .channel("tokenmunchers-live")
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "usage_events" }, (payload) => {
           const e = normalizeEvent(payload.new);
+          const call = activityFromIngest(e);
+          const { serverNow, feed } = activitySnapshot.current;
+          const recent = recentIngest.current;
+          if (recent.has(call.id) || feed.some((row) => row.id === call.id)) return;
+          recent.add(call.id);
+          const oldest = recent.values().next().value;
+          if (recent.size > 50 && oldest !== undefined) recent.delete(oldest);
           void ensureProfile(e.user_id);
           const day = utcDay(Date.parse(e.ts));
           if (day >= weekCutoff) setWeek((m) => addEvent(m, e));
           setAllTime((m) => addEvent(m, e));
           if (day === props.todayKey) setToday((m) => addEvent(m, e));
-          setFeed((f) => (f.some((x) => x.event_id === e.event_id) ? f : [e, ...f].slice(0, FEED_LIMIT)));
-          setFresh((s) => new Set(s).add(e.event_id));
+          setOptimisticActivity((previous) => ({
+            serverNow,
+            calls: mergeActivity(previous.serverNow === serverNow ? previous.calls : [], [call]),
+          }));
           setNow(Date.now());
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "live_sessions" }, (payload) => {
@@ -147,7 +167,10 @@ export function Dashboard(props: DashboardProps) {
 
   const rows = useMemo(() => {
     return Object.values(profiles)
-      .map((p) => ({ profile: p, t: totals[p.id], value: metricOf(totals[p.id], metric, includeSubagents) }))
+      .map((profile) => {
+        const t = totals[profile.id];
+        return { profile, t, value: metricOf(t, metric, includeSubagents), note: metric === "cost" && t ? spendNote(t) : "" };
+      })
       .sort((a, b) => (a.value === null ? b.value === null ? 0 : 1 : b.value === null ? -1 : b.value - a.value) || a.profile.display_name.localeCompare(b.profile.display_name));
   }, [profiles, totals, metric, includeSubagents]);
 
@@ -171,7 +194,10 @@ export function Dashboard(props: DashboardProps) {
   }, [props.daily, props.todayKey]);
 
   const periodLabel = period === "today" ? "today (UTC)" : period === "week" ? "last 7 days" : "all time";
-  const groupTotal = rows.reduce<number | null>((s, r) => addNullable(s, r.value), 0);
+  const groupTokens = metric === "tokens" ? rows.reduce<number | null>((s, r) => addNullable(s, r.value), 0) : 0;
+  const groupSpend = metric === "cost" ? Object.values(totals).reduce(combineSpend, emptySpend()) : emptySpend();
+  const groupCost = Object.keys(totals).length === 0 ? 0 : groupSpend.known_cost_usd;
+  const groupNote = metric === "cost" ? spendNote(groupSpend) : "";
 
   return (
     <div className="stack">
@@ -237,7 +263,7 @@ export function Dashboard(props: DashboardProps) {
                   onChange={setMetric}
                   options={[
                     ["tokens", "Tokens"],
-                    ["cost", "Cost"],
+                    ["cost", "Known spend"],
                   ]}
                   label="Metric"
                 />
@@ -259,11 +285,11 @@ export function Dashboard(props: DashboardProps) {
                   <th>Who</th>
                   <th className="spark-cell">{period === "today" ? "Today" : period === "week" ? "Last 7 days" : "All time"}</th>
                   <th className="num calls">Calls</th>
-                  <th className="num">{metric === "tokens" ? "Tokens" : "Cost"}</th>
+                  <th className="num">{metric === "tokens" ? "Tokens" : "Known spend"}</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map(({ profile: p, t, value }, i) => (
+                {rows.map(({ profile: p, t, value, note }, i) => (
                   <tr key={p.id} style={value === 0 ? { opacity: 0.55 } : undefined}>
                     <td className="rank">{value !== null && value > 0 ? i + 1 : "–"}</td>
                     <td>
@@ -289,8 +315,8 @@ export function Dashboard(props: DashboardProps) {
                     </td>
                     <td className="num calls sub">{t ? t.call_count === null ? "Unknown" : t.call_count.toLocaleString("en-US") : 0}</td>
                     <td className="num">
-                      <span className="value">{metric === "tokens" ? tokens(value) : usd(value)}</span>
-                      {t?.has_estimated_cost && metric === "cost" && <div className="sub">includes estimates</div>}
+                      <span className="value">{metric === "tokens" ? tokens(value) : t ? usd(value) : "–"}</span>
+                      {note && <div className="sub">{note}</div>}
                       {t?.has_reconstructed && <div className="sub">includes reconstruction</div>}
                       {metric === "tokens" && includeSubagents && t && t.subagent_tokens !== null && t.total_tokens !== null && t.subagent_tokens > 0 && (
                         <div className="sub" title="Share from subagent / swarm calls">
@@ -303,8 +329,8 @@ export function Dashboard(props: DashboardProps) {
               </tbody>
             </table>
             <p className="sub" style={{ margin: "10px 0 0" }}>
-              {metric === "tokens" ? tokens(groupTotal) + " tokens" : usd(groupTotal)} across the group, {periodLabel}.
-              {metric === "cost" && " Unavailable cost remains unknown; recorded estimates are not invoices."}
+              {metric === "tokens" ? tokens(groupTokens) + " tokens" : usd(groupCost) + " known spend"} across the group, {periodLabel}
+              {groupNote && ` (${groupNote})`}.
             </p>
           </section>
 
@@ -320,7 +346,7 @@ export function Dashboard(props: DashboardProps) {
         <section className="card" aria-labelledby="feed-h">
           <div className="card-head">
             <h2 id="feed-h">Activity</h2>
-            <span className="sub">Calls as they land</span>
+            <span className="sub">Latest calls</span>
           </div>
           {feed.length === 0 ? (
             <p className="empty">No calls yet. Set up OMP or munch from Settings.</p>
@@ -329,11 +355,12 @@ export function Dashboard(props: DashboardProps) {
               {feed.map((e) => {
                 const p = profiles[e.user_id];
                 return (
-                  <li key={e.event_id} className={fresh.has(e.event_id) ? "fresh" : undefined}>
+                  <li key={e.id} className={fresh.has(e.id) ? "fresh" : undefined}>
                     <Avatar profile={p} size={24} />
                     <span className="line">
-                      <strong>{p?.display_name ?? "…"}</strong>, {tokens(e.total_tokens)} tokens on {model(e.model)}
-                      {e.is_subagent && <span className="badge">subagent</span>}
+                      <strong>{p?.display_name ?? "…"}</strong>, {tokens(e.total_tokens)} tokens on {model(e.model)}{" "}
+                      <span className="badge">{activitySourceLabel(e.source)}</span>
+                      {e.is_subagent && <>{" "}<span className="badge">subagent</span></>}
                     </span>
                     <span className="meta" title={new Date(e.ts).toLocaleString()}>
                       {ago(e.ts, now)}
