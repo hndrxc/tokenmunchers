@@ -1,11 +1,12 @@
 import { notFound } from "next/navigation";
 
+import { ActivitySourceBadge, ActivityTagControls } from "@/components/ActivityTags";
 import { Avatar } from "@/components/Avatar";
 import { DailyBars } from "@/components/DailyBars";
 import { LiveRefresh } from "@/components/LiveRefresh";
 import { ModelBars, type ModelShare } from "@/components/ModelBars";
 import { Nav } from "@/components/Nav";
-import { activitySourceLabel, type ActivityCall } from "@/lib/activity";
+import type { ActivityCall } from "@/lib/activity";
 import { ago, model, spendNote, tokens, usd } from "@/lib/format";
 import { getMe } from "@/lib/me";
 import { addNullable, combineSpend, emptySpend, lastDays, LIVE_WINDOW_MS, normalizeSpend, startOfUtcDay, streaks, utcDay } from "@/lib/stats";
@@ -129,6 +130,7 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
           <div className="card-head">
             <h2 id="rc-h">Recent calls</h2>
           </div>
+          <ActivityTagControls />
           {calls.length === 0 ? (
             <p className="empty">No recent calls.</p>
           ) : (
@@ -137,7 +139,7 @@ export default async function ProfilePage({ params }: { params: Promise<{ handle
                 <li key={e.id}>
                   <span className="line">
                     {tokens(e.total_tokens)} tokens on {model(e.model)} <span className="sub">{e.provider}</span>
-                    {" "}<span className="badge">{activitySourceLabel(e.source)}</span>
+                    <ActivitySourceBadge source={e.source} />
                     {e.is_subagent && <>{" "}<span className="badge">subagent</span></>}
                   </span>
                   <span className="meta">

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activityFromIngest, activitySourceLabel, mergeActivity } from '../lib/activity.ts';
+import { activityFromIngest, mergeActivity } from '../lib/activity.ts';
 
 const ingestEvent = {
   event_id: 'abc',
@@ -47,7 +47,6 @@ test('merge keeps distinct sources and nullable metadata; the server wins ingest
   const liveOnly = activityFromIngest({ ...ingestEvent, event_id: 'new', ts: '2026-01-01T02:00:00Z' });
   const merged = mergeActivity([codex, committed, claudeCode], [realtime, liveOnly]);
   assert.deepEqual(merged, [liveOnly, claudeCode, codex, committed]);
-  assert.deepEqual(merged.map(({ source }) => activitySourceLabel(source)), ['OMP / proxy', 'Claude Code', 'Codex', 'OMP / proxy']);
 });
 
 test('ordering uses timestamp precision and ascending ID for equal instants', () => {

@@ -51,11 +51,3 @@ export function mergeActivity(authoritative: ActivityCall[], realtime: ActivityC
     .slice(0, 50)
     .map(({ call }) => call);
 }
-
-export function activitySourceLabel(source: ActivityCall["source"]): string {
-  switch (source) {
-    case "ingest": return "OMP / proxy";
-    case "claude-code": return "Claude Code";
-    case "codex": return "Codex";
-  }
-}

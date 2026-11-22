@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 
+import { ActivityTagPreferencesProvider } from "@/components/ActivityTags";
 import { Taskbar } from "@/components/Taskbar";
 
 import "./globals.css";
@@ -17,7 +18,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <div className="container">{children}</div>
+        <div className="container">
+          <ActivityTagPreferencesProvider>{children}</ActivityTagPreferencesProvider>
+        </div>
         <Taskbar />
       </body>
     </html>

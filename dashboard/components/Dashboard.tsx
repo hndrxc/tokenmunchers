@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ActivitySourceBadge, ActivityTagControls } from "@/components/ActivityTags";
 import { Avatar } from "@/components/Avatar";
 import { DailyBars } from "@/components/DailyBars";
 import { Sparkline } from "@/components/Sparkline";
-import { activityFromIngest, activitySourceLabel, mergeActivity, type ActivityCall } from "@/lib/activity";
+import { activityFromIngest, mergeActivity, type ActivityCall } from "@/lib/activity";
 import { ago, duration, model, spendNote, tokens, usd } from "@/lib/format";
 import { addEvent, addNullable, combineSpend, dailyByUser, emptySpend, LIVE_WINDOW_MS, metricOf, normalizeEvent, utcDay } from "@/lib/stats";
 import { createClient } from "@/lib/supabase/client";
@@ -348,6 +349,7 @@ export function Dashboard(props: DashboardProps) {
             <h2 id="feed-h">Activity</h2>
             <span className="sub">Latest calls</span>
           </div>
+          <ActivityTagControls />
           {feed.length === 0 ? (
             <p className="empty">No calls yet. Set up OMP or munch from Settings.</p>
           ) : (
@@ -358,8 +360,8 @@ export function Dashboard(props: DashboardProps) {
                   <li key={e.id} className={fresh.has(e.id) ? "fresh" : undefined}>
                     <Avatar profile={p} size={24} />
                     <span className="line">
-                      <strong>{p?.display_name ?? "…"}</strong>, {tokens(e.total_tokens)} tokens on {model(e.model)}{" "}
-                      <span className="badge">{activitySourceLabel(e.source)}</span>
+                      <strong>{p?.display_name ?? "…"}</strong>, {tokens(e.total_tokens)} tokens on {model(e.model)}
+                      <ActivitySourceBadge source={e.source} />
                       {e.is_subagent && <>{" "}<span className="badge">subagent</span></>}
                     </span>
                     <span className="meta" title={new Date(e.ts).toLocaleString()}>
