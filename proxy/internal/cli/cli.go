@@ -970,7 +970,13 @@ func (a *App) cmdUninstall(args []string) error {
 	if cfg.OMPViaPlugin {
 		fmt.Fprintf(a.Stdout, "The %s plugin was left installed and keeps reporting OMP usage; remove it with `omp plugin uninstall %s` if you don't want that.\n", omp.PluginName, omp.PluginName)
 	}
-	return errors.Join(hookErr, codexErr, claudeErr)
+	if err := errors.Join(hookErr, codexErr, claudeErr); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		fmt.Fprintln(a.Stdout, `Uninstall leaves munch.exe and your user Path unchanged. To finish removing Munch, delete munch.exe from its installation directory (by default %LOCALAPPDATA%\Programs\Munch), then remove just that directory from your user Path in "Edit environment variables for your account".`)
+	}
+	return nil
 }
 
 // removeShellHooks deletes the munch block from every profile install may

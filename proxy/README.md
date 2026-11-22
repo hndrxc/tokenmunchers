@@ -342,13 +342,17 @@ rm ~/.local/bin/munch
 
 #### Uninstall on Windows
 
-Run `munch uninstall` before deleting the executable. This stops the daemon and removes the unedited Codex settings Munch added, plus Munch's Claude Desktop telemetry keys from `settings.json` if it wrote them; restart Claude Desktop afterwards. Revert any manually configured Munch URLs and restart your tools. Close terminals where you applied routing, or clear it before removing the executable:
+Run `munch uninstall` before deleting the executable. A successful uninstall waits for the daemon to exit. It also removes the unedited Codex settings Munch added, plus Munch's Claude Desktop telemetry keys from `settings.json` if it wrote them; restart Claude Desktop afterwards.
+
+**Version 0.1.4:** Its `munch uninstall` does not stop the daemon. Run `munch stop` first, then `munch uninstall`. If Windows still reports that `munch.exe` is in use, wait for the daemon process to exit before trying to delete it again.
+
+Revert any manually configured Munch URLs and restart your tools. Close terminals where you applied routing, or clear it before removing the executable:
 
 ```powershell
 munch env --unset --shell powershell | Out-String | Invoke-Expression
 ```
 
-Delete `%LOCALAPPDATA%\Programs\Munch\munch.exe` and remove just `%LOCALAPPDATA%\Programs\Munch` from your **user** `Path` in **Edit environment variables for your account**. If you installed manually elsewhere, use that location instead. Leave `%APPDATA%\tmproxy` and `%LOCALAPPDATA%\tmproxy` in place to keep your key, settings, pending events, and logs. Delete those directories only if you intend to discard their contents. The OMP plugin and its own key are separate; uninstall the plugin only if you want OMP to stop reporting too.
+Uninstall intentionally leaves the executable and your user `Path` unchanged. To finish removing Munch, delete `%LOCALAPPDATA%\Programs\Munch\munch.exe` and remove just `%LOCALAPPDATA%\Programs\Munch` from your **user** `Path` in **Edit environment variables for your account**. If you installed manually elsewhere, use that location instead. Leave `%APPDATA%\tmproxy` and `%LOCALAPPDATA%\tmproxy` in place to keep your key, settings, pending events, and logs. The OMP plugin and its own key are separate; uninstall the plugin only if you want OMP to stop reporting too.
 
 ### No double counting and secrets
 

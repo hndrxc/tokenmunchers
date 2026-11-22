@@ -50,11 +50,17 @@ try {
             }
         }
     }
+    if ($PSCmdlet.ParameterSetName -eq 'Binary') {
+        $copy = Join-Path $root 'munch.exe'
+        Copy-Item -LiteralPath $Binary -Destination $copy
+        $Binary = $copy
+    }
 
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Start()
     try {
-        $listen = '127.0.0.1:' + $listener.LocalEndpoint.Port
+        $port = $listener.LocalEndpoint.Port
+        $listen = '127.0.0.1:' + $port
     } finally {
         $listener.Stop()
     }
@@ -63,6 +69,8 @@ try {
         APPDATA = Join-Path $root 'Roaming'
         LOCALAPPDATA = Join-Path $root 'Local'
         USERPROFILE = Join-Path $root 'Profile'
+        CODEX_HOME = Join-Path $root 'Codex'
+        CLAUDE_CONFIG_DIR = Join-Path $root 'Claude'
         TMPROXY_CONFIG_DIR = $null
         TMPROXY_STATE_DIR = $null
         TMPROXY_LISTEN = $listen
@@ -95,6 +103,7 @@ try {
     if (-not $status.running -or $status.service.backend -ne 'pidfile' -or $status.service.installed) {
         throw 'Install did not start the fallback daemon without registering a service'
     }
+    $pidFile = $status.service.unit_path
     Invoke-Munch stop
     $needsStop = $false
     $status = Invoke-Munch status --json | ConvertFrom-Json
@@ -108,8 +117,34 @@ try {
     if ($childOutput -notmatch ('^OPENAI_BASE_URL=http://' + [regex]::Escape($listen) + '/_tm/[a-f0-9]{64}/openai/v1$')) {
         throw 'munch exec did not give the child the local proxy route'
     }
-    Invoke-Munch stop
-    $needsStop = $false
+    $pendingRequest = [Net.Sockets.TcpClient]::new()
+    try {
+        $pendingRequest.Connect('127.0.0.1', $port)
+        # Leave the first HTTP request incomplete so shutdown closes the listener
+        # before the daemon can exit. Do not release it until after deletion.
+        $headers = [Text.Encoding]::ASCII.GetBytes("GET / HTTP/1.1`r`nHost: $listen`r`n")
+        $pendingRequest.GetStream().Write($headers, 0, $headers.Length)
+        Start-Sleep -Milliseconds 200
+        Invoke-Munch uninstall
+        Remove-Item -LiteralPath $Binary
+        $needsStop = $false
+    } finally {
+        $pendingRequest.Dispose()
+    }
+    if (Test-Path -LiteralPath $pidFile) {
+        throw 'Daemon PID file remains after uninstall'
+    }
+    $probe = [Net.Sockets.TcpClient]::new()
+    try {
+        $probe.Connect('127.0.0.1', $port)
+        throw 'Daemon is still listening after uninstall'
+    } catch [Net.Sockets.SocketException] {
+        if ($_.Exception.GetBaseException().SocketErrorCode -ne [Net.Sockets.SocketError]::ConnectionRefused) {
+            throw
+        }
+    } finally {
+        $probe.Dispose()
+    }
 } finally {
     try {
         if ($needsStop) {
