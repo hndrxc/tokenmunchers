@@ -307,6 +307,42 @@ try {
   assert.equal((await request('begin',randomUUID(),{cutoff,chunk_count:1},bfDevice)).error,'mode_conflict','a backfill source is never demoted');
   assert.equal((await request('begin',randomUUID(),{cutoff,backfill_from:bfFrom,chunk_count:1})).error,'mode_conflict','a legacy source cannot be adopted as backfill');
   assert.equal((await request('begin',randomUUID(),{cutoff,backfill_from:cutoff,chunk_count:1},bfDevice)).error,'invalid_body','from must strictly precede cutoff');
+  // A desktop source acknowledges the whole batch even when backfill got there first.
+  const desktopDevice = randomUUID();
+  async function stageDesktop(rows, extra = {}) {
+    const sid = randomUUID();
+    assert.equal((await request('begin',sid,{cutoff:bfFrom,chunk_count:1},desktopDevice)).ok,true);
+    assert.equal((await request('chunk',sid,{index:0,observations:rows,...extra},desktopDevice)).ok,true);
+    return sid;
+  }
+  const dailyTokens = async () => Number((await db.query('select coalesce(sum(total_tokens),0) as tokens from public.usage_daily_all where user_id=$1',[uid])).rows[0].tokens);
+  const acceptedRow = async id => (await db.query('select device_id,partition,input_tokens,output_tokens,observation,superseded,alias_to from public.collector_contributions where user_id=$1 and harness=$2 and canonical_id=$3',[uid,'codex',id])).rows[0];
+  const historyRow = await acceptedRow('bf-new');
+  assert.deepEqual([historyRow.device_id,historyRow.partition,Number(historyRow.input_tokens),Number(historyRow.output_tokens)],[bfDevice,'history',100,20]);
+  const beforeDesktop = await dailyTokens();
+  const desktopRows = [observation('bf-new',{input_tokens:999}),observation('desktop-new')];
+  const desktopMixed = await stageDesktop(desktopRows);
+  const desktopReceipt = await request('commit',desktopMixed,{},desktopDevice);
+  assert.deepEqual(desktopReceipt,{ok:true,action:'commit',snapshot_id:desktopMixed,accepted:2,committed:true});
+  assert.equal((await request('begin',desktopMixed,{cutoff:bfFrom,chunk_count:1},desktopDevice)).ok,true);
+  assert.equal((await request('chunk',desktopMixed,{index:0,observations:desktopRows},desktopDevice)).ok,true);
+  assert.deepEqual(await request('commit',desktopMixed,{},desktopDevice),desktopReceipt);
+  const desktopRow = await acceptedRow('desktop-new');
+  assert.deepEqual([desktopRow.device_id,desktopRow.partition,Number(desktopRow.input_tokens)],[desktopDevice,'live',100]);
+  assert.deepEqual(await acceptedRow('bf-new'),historyRow);
+  assert.equal(await dailyTokens(),beforeDesktop+120,'only the new desktop ID adds to daily usage');
+
+  // A valid alias retires a same-source fallback but leaves the backfill response alone.
+  const desktopFallback = await stageDesktop([observation('desktop-fallback',{identity_strength:'request'})]);
+  assert.equal((await request('commit',desktopFallback,{},desktopDevice)).accepted,1);
+  const desktopAlias = await stageDesktop([desktopRows[0]],{identity_aliases:[{from:'desktop-fallback',to:'bf-new'}]});
+  assert.equal((await request('commit',desktopAlias,{},desktopDevice)).accepted,1);
+  const aliasedRow = await acceptedRow('desktop-fallback');
+  assert.deepEqual([aliasedRow.device_id,aliasedRow.superseded,aliasedRow.alias_to],[desktopDevice,true,'bf-new']);
+  const desktopRetire = await stageDesktop([],{superseded_canonical_ids:['bf-new']});
+  assert.equal((await request('commit',desktopRetire,{},desktopDevice)).error,'supersession_conflict');
+  assert.deepEqual(await acceptedRow('bf-new'),historyRow);
+  assert.equal(await dailyTokens(),beforeDesktop+120,'the retired fallback does not double count');
   // Large staged snapshot: begin + 59 chunks spend one whole shared minute (60 requests x 10 of 600 hits).
   // The commit must receive accurate reset timing, publish nothing while limited, and succeed after
   // waiting exactly Retry-After seconds, resuming from the failed request rather than chunk zero.

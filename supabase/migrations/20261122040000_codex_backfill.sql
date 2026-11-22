@@ -1,12 +1,15 @@
 -- Codex backfill mode: an optional inclusive backfill_from per source.
--- Legacy collector behavior is unchanged; backfill adds an immutable source mode
--- whose staged rows must be observed Codex request/response records inside
+-- Backfill adds an immutable source mode whose staged rows must be observed
+-- Codex request/response records inside
 -- [backfill_from, cutoff), with all tokens present, one call, nonzero total,
 -- unknown cost, and a valid session. Inserts are history append-only: already
 -- accepted canonical IDs (any device/metadata/partition, superseded included)
 -- and reserved retirement IDs are never updated or resurrected. Modern
 -- candidates on a UTC date with any active reconstructed Codex contribution for
 -- that user are conservatively skipped so legacy interval rows are preserved.
+-- Normal commits acknowledge but do not write observations owned by another
+-- backfill source. Aliases may retire the publishing source's request identity
+-- in favor of an active backfill response; cross-source supersession still fails.
 alter table private.collector_sources add column backfill_from timestamptz;
 alter table private.collector_sources add constraint collector_sources_backfill_mode_check check (backfill_from is null or (harness='codex' and backfill_from<cutoff));
 
@@ -109,7 +112,11 @@ begin
         update private.contribution_chunks set observations=null,superseded_canonical_ids='[]'::jsonb,identity_aliases='[]'::jsonb where user_id=uid and device_id=dev and snapshot_id=sid;
         return jsonb_build_object('ok',true,'action',action,'snapshot_id',sid,'accepted',fresh,'committed',true);
       end if;
-      select o->>'canonical_id' into conflict_id from private.contribution_chunks c cross join lateral jsonb_array_elements(c.observations) o join public.collector_contributions accepted on accepted.user_id=uid and accepted.harness=source and accepted.canonical_id=o->>'canonical_id' and accepted.device_id<>dev where c.user_id=uid and c.device_id=dev and c.snapshot_id=sid limit 1;
+      select o->>'canonical_id' into conflict_id
+      from private.contribution_chunks c cross join lateral jsonb_array_elements(c.observations) o
+      join public.collector_contributions accepted on accepted.user_id=uid and accepted.harness=source and accepted.canonical_id=o->>'canonical_id' and accepted.device_id<>dev
+      left join private.collector_sources owner on owner.user_id=accepted.user_id and owner.device_id=accepted.device_id
+      where c.user_id=uid and c.device_id=dev and c.snapshot_id=sid and owner.backfill_from is null limit 1;
       if conflict_id is not null then return jsonb_build_object('error','ownership_conflict','canonical_id',conflict_id); end if;
       select o->>'canonical_id' into conflict_id from private.contribution_chunks c cross join lateral jsonb_array_elements(c.observations) o join private.contribution_retirements r on r.user_id=uid and r.harness=source and r.canonical_id=o->>'canonical_id' and r.device_id<>dev where c.user_id=uid and c.device_id=dev and c.snapshot_id=sid limit 1;
       if conflict_id is not null then return jsonb_build_object('error','ownership_conflict','canonical_id',conflict_id); end if;
@@ -152,11 +159,19 @@ begin
       on conflict(user_id,harness,canonical_id) do nothing;
       insert into public.collector_contributions as accepted(user_id,harness,canonical_id,device_id,observation,superseded,ts,partition,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,call_count,cost_usd)
       select uid,source,o->>'canonical_id',dev,o,exists(select 1 from private.contribution_retirements r where r.user_id=uid and r.harness=source and r.canonical_id=o->>'canonical_id'),(o->>'timestamp')::timestamptz,case when (o->>'timestamp')::timestamptz<src.cutoff then 'history' else 'live' end,(o->>'input_tokens')::bigint,(o->>'output_tokens')::bigint,(o->>'cache_read_tokens')::bigint,(o->>'cache_write_tokens')::bigint,(o->>'call_count')::bigint,(o->>'cost_usd')::numeric
-      from private.contribution_chunks c cross join lateral jsonb_array_elements(c.observations) o where c.user_id=uid and c.device_id=dev and c.snapshot_id=sid
+      from private.contribution_chunks c cross join lateral jsonb_array_elements(c.observations) o
+      where c.user_id=uid and c.device_id=dev and c.snapshot_id=sid
+        and not exists(
+          select 1 from public.collector_contributions prior
+          join private.collector_sources owner on owner.user_id=prior.user_id and owner.device_id=prior.device_id
+          where prior.user_id=uid and prior.harness=source and prior.canonical_id=o->>'canonical_id'
+            and prior.device_id<>dev and owner.backfill_from is not null
+        )
       on conflict(user_id,harness,canonical_id) do update set observation=excluded.observation,superseded=accepted.superseded or excluded.superseded,ts=excluded.ts,partition=excluded.partition,input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,cache_read_tokens=excluded.cache_read_tokens,cache_write_tokens=excluded.cache_write_tokens,call_count=excluded.call_count,cost_usd=excluded.cost_usd;
       update public.collector_contributions accepted set superseded=true
       from private.contribution_chunks c cross join lateral jsonb_array_elements_text(c.superseded_canonical_ids) retired_id
       where c.user_id=uid and c.device_id=dev and c.snapshot_id=sid and accepted.user_id=uid and accepted.harness=source and accepted.device_id=dev and accepted.canonical_id=retired_id;
+      -- An alias can retire our request identity without changing the accepted response.
       insert into public.collector_contributions as old(user_id,harness,canonical_id,device_id,observation,superseded,alias_to,ts,partition,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,call_count,cost_usd)
       select distinct uid,source,a->>'from',dev,jsonb_set(jsonb_set(target.observation,'{canonical_id}',a->'from'),'{identity_strength}',to_jsonb('request'::text)),true,a->>'to',target.ts,target.partition,target.input_tokens,target.output_tokens,target.cache_read_tokens,target.cache_write_tokens,target.call_count,target.cost_usd
       from private.contribution_chunks c cross join lateral jsonb_array_elements(c.identity_aliases) a
