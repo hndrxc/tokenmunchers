@@ -148,6 +148,9 @@ func Upload(ctx context.Context, ingestURL, apiKey, stateDir, root string, windo
 		if err != nil {
 			return 0, errProtocol
 		}
+		if len(body) > maxChunkBytes {
+			return 0, errChunkTooLarge
+		}
 		st, _, rb, err = sendWithRetry(ctx, client, contribURL, apiKey, body)
 		if err != nil {
 			return 0, err
@@ -450,9 +453,9 @@ func encodeObservation(r Record) wireObservation {
 
 // splitRows partitions encoded observations into deterministic chunks bounded
 // by <=500 rows and the 256 KiB body budget. The exact envelope size (with the
-// widest possible index) is reserved up front and every row adds its encoded
-// length plus one comma, so a generated chunk body never exceeds the budget.
-// The partitioning depends only on the sorted row set.
+// widest possible index and full-width UUIDs) is reserved up front and every
+// row adds its encoded length plus one comma, so a generated chunk body never
+// exceeds the budget. The partitioning depends only on the sorted row set.
 func splitRows(rows []json.RawMessage) ([][]json.RawMessage, error) {
 	base := chunkEnvelopeSize()
 	budget := maxChunkBytes - base
@@ -461,6 +464,9 @@ func splitRows(rows []json.RawMessage) ([][]json.RawMessage, error) {
 	curBytes := 0
 	for _, row := range rows {
 		add := len(row) + 1 // comma
+		if add > budget {
+			return nil, errChunkTooLarge
+		}
 		if len(cur) > 0 && (len(cur)+1 > maxObservationsPerChunk || curBytes+add > budget) {
 			groups = append(groups, cur)
 			cur = nil
@@ -479,11 +485,16 @@ func splitRows(rows []json.RawMessage) ([][]json.RawMessage, error) {
 }
 
 // chunkEnvelopeSize returns the exact encoded size of a chunk envelope with an
-// empty observation array and the widest possible index. Every row adds
-// len(row)+1 bytes on top of this.
+// empty observation array, the widest possible index, and the device and
+// snapshot UUIDs every real chunk carries. Every row adds len(row)+1 bytes on
+// top of this.
 func chunkEnvelopeSize() int {
+	const uuidWidth = "00000000-0000-0000-0000-000000000000"
 	b, err := json.Marshal(chunkRequest{
 		Action:                 "chunk",
+		DeviceID:               uuidWidth,
+		Harness:                harnessCodex,
+		SnapshotID:             uuidWidth,
 		Index:                  maxChunks - 1,
 		Observations:           []json.RawMessage{},
 		SupersededCanonicalIDs: []string{},

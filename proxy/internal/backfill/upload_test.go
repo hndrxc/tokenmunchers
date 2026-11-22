@@ -322,6 +322,50 @@ func TestChunkBoundaryPackingWithLargeIdentifiers(t *testing.T) {
 	}
 }
 
+// TestChunkBodiesFitServerLimitWithRealisticRows: realistic rows fill chunks
+// by bytes rather than by count, so every real body (device and snapshot
+// UUIDs included) must still fit the server's 256 KiB limit at any ID width.
+func TestChunkBodiesFitServerLimitWithRealisticRows(t *testing.T) {
+	for idLen := 40; idLen <= 80; idLen++ {
+		var recs []Record
+		for i := range 1200 {
+			id := fmt.Sprintf("resp_%0*d", idLen-len("resp_"), i)
+			r := testRecord(id)
+			r.SessionID = fmt.Sprintf("019a%04x-5f8f-7c71-94cf-ec6ca289a888", i)
+			r.ParentSessionID = "019a2024-5f8f-7c71-94cf-ec6ca289a888"
+			r.Input, r.Output, r.CacheRead = int64(7361+i), int64(20+i), int64(12800+i)
+			recs = append(recs, r)
+		}
+		var largest int
+		f := newFakeContrib(t, func(w http.ResponseWriter, body []byte) {
+			var req struct {
+				Action     string `json:"action"`
+				SnapshotID string `json:"snapshot_id"`
+			}
+			_ = json.Unmarshal(body, &req)
+			if len(body) > maxChunkBytes {
+				ack(w, http.StatusRequestEntityTooLarge, `{"error":"too_large"}`)
+				return
+			}
+			switch req.Action {
+			case "begin":
+				ack(w, 200, `{"ok":true,"action":"begin","snapshot_id":"%s"}`, req.SnapshotID)
+			case "chunk":
+				largest = max(largest, len(body))
+				ack(w, 200, `{"ok":true,"action":"chunk","snapshot_id":"%s"}`, req.SnapshotID)
+			default:
+				ack(w, 200, `{"ok":true,"action":"commit","snapshot_id":"%s","accepted":1200,"committed":true}`, req.SnapshotID)
+			}
+		})
+		if accepted, err := Upload(context.Background(), f.url(), "k", newStateDir(t), "/r", uploadWindow, recs); err != nil || accepted != 1200 {
+			t.Fatalf("id length %d: accepted=%d err=%v", idLen, accepted, err)
+		}
+		if largest <= maxChunkBytes-1024 {
+			t.Fatalf("id length %d: largest chunk %d bytes never approached the limit; the test no longer exercises byte-bounded chunks", idLen, largest)
+		}
+	}
+}
+
 // TestUploadNoRedirects: a 3xx must surface as a protocol error and never be
 // followed to another destination.
 func TestUploadNoRedirects(t *testing.T) {

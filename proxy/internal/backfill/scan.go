@@ -143,7 +143,9 @@ func Scan(ctx context.Context, root string, window Window, desktop DesktopOwners
 				kept++
 			}
 		}
-		excl[ExclWithheldContradiction] += kept
+		if kept > 0 {
+			excl[ExclWithheldContradiction] += kept
+		}
 		acct = &accounting{byID: make(map[string]*acctEntry), conflicts: make(map[string]bool)}
 	}
 	return Preview{Records: acct.records(), Excluded: excl}, nil
@@ -559,6 +561,7 @@ type threadSettingsPayload struct {
 
 type eventMsgPayload struct {
 	Type           string                 `json:"type"`
+	ThreadID       string                 `json:"thread_id"`
 	ThreadSettings *threadSettingsPayload `json:"thread_settings"`
 }
 
@@ -574,6 +577,9 @@ func handleEventMsg(env *wireLine, ordinal uint64, ordOK bool, st *fileState, ex
 	case "thread_settings_applied":
 		if st.haveOwn && ordOK && ordinal < st.ownStart {
 			return // inherited parent settings
+		}
+		if p.ThreadID != "" && st.thread != "" && p.ThreadID != st.thread {
+			return // a copied snapshot keeps its original owner's thread_id
 		}
 		if p.ThreadSettings != nil {
 			if p.ThreadSettings.Model != "" {

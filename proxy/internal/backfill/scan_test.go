@@ -425,6 +425,24 @@ func TestScanMunchContradiction(t *testing.T) {
 	})
 }
 
+// A legacy-mode fork (no ordinals) replays the parent's settings event, which
+// keeps the parent's thread_id; it must not replace the fork's own provider.
+func TestScanForkIgnoresCopiedThreadSettings(t *testing.T) {
+	root := t.TempDir()
+	copied := threadSettings("gpt-5-codex", "openai")
+	copied["thread_id"] = "pa-001"
+	newFile().
+		add(ts("2026-11-18T10:00:00.000Z"), nil, "session_meta", sessionMeta("fk-001", nil, strp("pa-001"), strp("munch_chatgpt"), nil, "cli")).
+		add(ts("2026-11-18T10:00:00.000Z"), nil, "session_meta", sessionMeta("pa-001", nil, nil, strp("openai"), nil, "cli")).
+		add(ts("2026-11-18T10:00:00.000Z"), nil, "event_msg", copied).
+		add(ts("2026-11-18T10:00:05.000Z"), nil, "token_usage_record", record("resp_F", "fk-001", "turn-1", usage(100, 0, nil, 50, 0, 150))).
+		write(t, root, "sessions/2026/11/18/rollout-fork.jsonl")
+
+	pv := scanRoot(t, root, testWindow)
+	wantIDs(t, pv, nil)
+	wantExcluded(t, pv, map[string]int{ExclWindowContradiction: 1})
+}
+
 func TestScanMunchAfterWindowNoContradiction(t *testing.T) {
 	root := t.TempDir()
 	newFile().
