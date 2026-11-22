@@ -67,8 +67,7 @@ On Windows, follow [Windows PowerShell](#windows-powershell) below. The followin
 1. **Install the binary** on Linux or macOS. The installer checks the release archive's SHA-256 checksum; no Go or `sudo` required.
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.sh -o install-munch.sh &&
-     sh install-munch.sh
+   curl -fsSL https://tokenmunchers.taiisshort.com/install.sh | sh
    ```
 
    Make sure `~/.local/bin` is on your `PATH`. See [other install options](proxy/README.md#install-a-release).
@@ -88,7 +87,7 @@ To upgrade, run `munch update`, then `munch restart` if the background service i
 On Windows 10 or 11 (`amd64` or `arm64`), open PowerShell 5.1 or newer. No Go or administrator account is needed. Create a `tm_` key in [Settings](https://tokenmunchers.taiisshort.com/settings) → API keys, then run:
 
 ```powershell
-irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1 | iex
+irm https://tokenmunchers.taiisshort.com/install.ps1 | iex
 ```
 
 Paste the key when Munch asks. Answer the questions it asks about Claude Desktop, the Codex desktop app, Codex CLI, and OMP when it detects them. Then run `munch status` and look for your first routed request in the dashboard's **Activity** feed.
