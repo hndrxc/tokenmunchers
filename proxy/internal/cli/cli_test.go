@@ -639,6 +639,11 @@ func newInstallFixture(t *testing.T) *installFixture {
 	if runtime.GOOS == "windows" {
 		t.Skip("install tests use POSIX shell profiles")
 	}
+	return newInstallFixtureForPlatform(t)
+}
+
+func newInstallFixtureForPlatform(t *testing.T) *installFixture {
+	t.Helper()
 	tmp := t.TempDir()
 	f := &installFixture{
 		t:        t,
@@ -667,6 +672,9 @@ func newInstallFixture(t *testing.T) *installFixture {
 	f.listen = strings.TrimPrefix(srv.URL, "http://")
 
 	t.Setenv("HOME", f.home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", f.home)
+	}
 	t.Setenv("SHELL", "/bin/bash")
 	t.Setenv("PATH", filepath.Join(tmp, "no-such-bin"))
 	t.Setenv("TMPROXY_CONFIG_DIR", f.cfgDir)
@@ -815,6 +823,41 @@ func TestInstallSetsUpKeyServiceAndShell(t *testing.T) {
 	}
 }
 
+func TestWindowsInstallLeavesProfilesAloneAndShowsSessionRouting(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows install behavior")
+	}
+	f := newInstallFixtureForPlatform(t) // SHELL is set to bash.
+	f.svc.backend = "pidfile"
+	f.svc.installErr = errors.New("not supported")
+	t.Setenv("TOKENMUNCHERS_KEY", f.key)
+
+	code, out, errOut := f.run("", "install", "--yes", "--no-codex")
+	if code != 0 {
+		t.Fatalf("install failed (code=%d): out=%s err=%s", code, out, errOut)
+	}
+	if entries, err := os.ReadDir(f.home); err != nil || len(entries) != 0 {
+		t.Errorf("Windows install should not touch profiles (entries=%v, err=%v)", entries, err)
+	}
+	for _, want := range []string{
+		"without administrator rights, a Windows service, or a scheduled task",
+		"profile not modified; PowerShell execution policy is unchanged",
+		"stops at Windows logout or reboot",
+		"munch start",
+		"munch env --shell powershell | Out-String | Invoke-Expression",
+		"munch exec -- claude",
+		"run `munch status`, then send a request from a routed tool",
+		"dashboard under Activity",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "$PROFILE") || strings.Contains(out, f.key) || strings.Contains(out, "/_tm/") {
+		t.Errorf("Windows setup should not suggest a profile edit or expose a secret:\n%s", out)
+	}
+}
+
 func TestInstallPromptsForKey(t *testing.T) {
 	f := newInstallFixture(t)
 
@@ -914,10 +957,16 @@ func TestInstallEnvFlags(t *testing.T) {
 	if got := installEnvFlags("", "", ""); len(got) != 0 {
 		t.Errorf("no overrides should yield no flags, got %v", got)
 	}
-	got := installEnvFlags("rel/cfg", "/abs/state", " 127.0.0.1:9000 ")
-	want := []envFlag{{"--config-dir", absPath("rel/cfg")}, {"--state-dir", "/abs/state"}, {"--listen", "127.0.0.1:9000"}}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relConfig := filepath.Join("rel", "cfg")
+	stateDir := t.TempDir()
+	got := installEnvFlags(relConfig, stateDir, " 127.0.0.1:9000 ")
+	want := []envFlag{{"--config-dir", filepath.Join(cwd, relConfig)}, {"--state-dir", stateDir}, {"--listen", "127.0.0.1:9000"}}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("installEnvFlags = %v, want %v", got, want)
+		t.Fatalf("installEnvFlags = %v, want %v", got, want)
 	}
 	if !filepath.IsAbs(got[0].value) {
 		t.Errorf("a profile line cannot rely on the working directory, got %q", got[0].value)

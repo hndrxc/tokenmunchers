@@ -11,11 +11,41 @@ For first-party desktop subscription usage without routing inference through Mun
 - **HTTP/SSE only:** WebSocket upgrades are rejected (HTTP 426), so transports or client features that need WebSockets do not work through the proxy.
 - **Uses the existing TokenMunchers API flow:** authenticates with your normal `tm_` API key, posts strictly allowlisted `usage` events to `/functions/v1/ingest`, appears live on the dashboard and **Live now** presence automatically, and retries offline via an on-disk JSONL queue.
 - **Metadata-only reporting:** inference traffic goes to the configured provider; TokenMunchers receives usage metrics and identifiers, not prompts, completions, tool output, or provider credentials.
-- **Linux-first, easily portable:** standalone Go binary (`CGO_ENABLED=0`), XDG paths + `systemd --user` service on Linux, `launchd` LaunchAgent on macOS, and a background-process fallback elsewhere.
+- **Native binaries:** standalone Go executable (`CGO_ENABLED=0`), `systemd --user` on Linux, a `launchd` LaunchAgent on macOS, and a detached per-login background process on Windows.
 
 ---
 
 ## Quick Start
+
+### Windows PowerShell
+
+Use PowerShell 5.1 or newer on Windows 10 or 11 (`amd64` or `arm64`). No Go or administrator account is needed. Create a `tm_` key on the [dashboard](https://tokenmunchers.taiisshort.com/settings) under **Settings → API keys**. Download the installer to a file and review it before running it:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing `
+  -Uri 'https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1' `
+  -OutFile '.\install-munch.ps1'
+```
+
+Run `.\install-munch.ps1` after review. If `RemoteSigned` blocks the download, you can unblock just the reviewed file with `Unblock-File -LiteralPath '.\install-munch.ps1'`. If policy still blocks it, use the [manual ZIP install](#manual-windows-install) instead of changing policy.
+
+The installer checks `SHA256SUMS`, installs `munch.exe` to `%LOCALAPPDATA%\Programs\Munch`, adds that directory to your user `PATH`, and runs `munch install`. Paste the key when Munch asks; your input is visible. Use `.\install-munch.ps1 -DownloadOnly` to install the executable and update `PATH` without running CLI setup, then run `munch install` when ready. If `munch` isn't found, open a new terminal or run `& "$env:LOCALAPPDATA\Programs\Munch\munch.exe"` with the desired arguments.
+
+Munch starts a detached process in your login session. It does not set up an automatic startup task or service, edit PowerShell profiles, or change execution policy. Run `munch start` after signing in again if it's not running. To check it and route a single command without changing your terminal's environment:
+
+```powershell
+munch status
+munch exec -- claude
+```
+
+With Claude Code installed, make a real request and check the dashboard's **Activity** feed. Alternatively, run `munch env --shell powershell | Out-String | Invoke-Expression` in the PowerShell terminal where you'll launch your tools; it applies only there and to processes started from it. Restart tools that were already open.
+
+- **Codex CLI with ChatGPT sign-in:** accept the optional setup in `munch install` and restart Codex. Environment variables alone don't route this mode. See [manual Codex setup](#4-codex-chatgpt-sign-in) if needed.
+- **OMP:** accept the optional plugin setup to report through the plugin, or decline it and disable `omp-tokenmunchers` if you prefer the proxy. See [OMP routing](#oh-my-pi-omp-tm) to avoid double counting.
+
+To upgrade, stop Munch and [rerun the installer](#update-an-installed-release). For config, queue, and log paths see [Locations](#locations); to remove it without losing your key see [Uninstall on Windows](#uninstall-on-windows).
+
+### Linux and macOS
 
 You need Linux or macOS on `amd64` or `arm64`, and a `tm_` API key from the dashboard under **Settings → API keys**.
 
@@ -81,7 +111,7 @@ Fish shell (`~/.config/fish/config.fish`):
 munch env --check --shell fish | source
 ```
 
-PowerShell (`$PROFILE`):
+PowerShell (run in the current terminal; adding this to `$PROFILE` is optional and is not done by Munch):
 
 ```powershell
 munch env --shell powershell | Out-String | Invoke-Expression
@@ -132,7 +162,7 @@ The pilot is off by default. It observes eligible local desktop usage without ch
 
 ### Build, opt in, and check status
 
-Release archives are Linux/macOS only. For a native Windows build, run this in `proxy/` with Go 1.24+:
+Install a [release](#install-a-release), or build manually. For a native Windows build, run this in `proxy/` with Go 1.24+:
 
 ```powershell
 go build -o munch.exe ./cmd/munch
@@ -176,7 +206,7 @@ Use `munch desktop claude off` and/or `munch desktop codex off`, then restart Mu
 
 ## What Munch changes
 
-Everything the installer script and `munch` write, start, or edit, and what stays behind. Nothing needs `sudo`, edits `PATH`, or installs a certificate, and Munch never reads or stores provider credentials.
+Everything the installer script and `munch` write, start, or edit, and what stays behind. Nothing needs administrator privileges or installs a certificate, and Munch never reads or stores provider credentials. Only the Windows installer updates your user `PATH`.
 
 ### Locations
 
@@ -191,7 +221,7 @@ Flags win over environment variables, which win over `config.json` and the defau
 | Listen address | `127.0.0.1:8787` | same | `listen_addr` (`munch login --listen`), `TMPROXY_LISTEN`, `--listen`; numeric loopback only |
 | Ingest URL | hosted TokenMunchers `ingest` | same | `ingest_url` (`munch login --url`), `TOKENMUNCHERS_URL`; HTTPS or numeric-loopback HTTP |
 
-Source builds on other systems use Go's user config and cache directories plus `tmproxy`. The `tmproxy` names are kept from the program's former name.
+On Windows, the default install directory is `%LOCALAPPDATA%\Programs\Munch`, the config directory is `%APPDATA%\tmproxy`, and the state directory is `%LOCALAPPDATA%\tmproxy` (`tmproxy.log` and `tmproxy.pid` are there). The config and state overrides above apply on Windows too. There is no installed Windows service. Config and state defaults on other systems use Go's user config and cache directories plus `tmproxy`. The `tmproxy` names are kept from the program's former name.
 
 | File | Contents and writers |
 | --- | --- |
@@ -206,6 +236,8 @@ Source builds on other systems use Go's user config and cache directories plus `
 ### Installer script and `munch login`
 
 `install-munch.sh` writes only `munch` (mode `755`) to `${MUNCH_INSTALL_DIR:-$HOME/.local/bin}`. It takes the newest published stable `munch-vX.Y.Z` release, verifies the archive against `SHA256SUMS` in a temporary directory under `$TMPDIR` (default `/tmp`), and moves the binary into place with one rename; temporary files are removed on exit. It does not touch `PATH`, profiles, config, or services, and does not run `munch`.
+
+`install-munch.ps1` installs the matching native Windows executable from the newest stable release after checking the ZIP against `SHA256SUMS`, adds its directory to the user `PATH`, and runs `munch install` unless `-DownloadOnly` was specified.
 
 `munch login` saves `api_key` after a format check (no network call), plus `ingest_url` with `--url` and `listen_addr` with `--listen`. A running daemon keeps its old settings until `munch restart`.
 
@@ -239,7 +271,7 @@ The daemon reads `config.json`, `prices.json`, and both keys only at startup. A 
 
 ### `munch update`
 
-Release builds only (source builds report `dev`), on Linux or macOS, `amd64` or `arm64`. It takes the highest stable `munch-vX.Y.Z` from fixed GitHub HTTPS URLs (nothing configures the source) and never downgrades or reinstalls. It stages next to the binary the running `munch` resolves to (following symlinks; that directory must be writable), checks the archive against `SHA256SUMS` and the binary header against your platform, and swaps it in with one rename that keeps the permission bits. Config, keys, service, profiles, Codex, and OMP are untouched, and the daemon runs the old version until `munch restart`.
+Release builds only (source builds report `dev`), on Linux or macOS, `amd64` or `arm64`. It takes the highest stable `munch-vX.Y.Z` from fixed GitHub HTTPS URLs (nothing configures the source) and never downgrades or reinstalls. It stages next to the binary the running `munch` resolves to (following symlinks; that directory must be writable), checks the archive against `SHA256SUMS` and the binary header against your platform, and swaps it in with one rename that keeps the permission bits. Config, keys, service, profiles, Codex, and OMP are untouched, and the daemon runs the old version until `munch restart`. Native Windows does not support `munch update`.
 
 ### `munch env`, `munch exec`, and read-only commands
 
@@ -263,6 +295,16 @@ rm -rf ~/.config/tmproxy ~/.local/state/tmproxy   # API key, local key, queue, u
 rm ~/.local/bin/munch
 ```
 
+#### Uninstall on Windows
+
+Run `munch uninstall` before deleting the executable. This stops the daemon and removes the unedited Codex settings Munch added. Revert any manually configured Munch URLs and restart your tools. Close terminals where you applied routing, or clear it before removing the executable:
+
+```powershell
+munch env --unset --shell powershell | Out-String | Invoke-Expression
+```
+
+Delete `%LOCALAPPDATA%\Programs\Munch\munch.exe` and remove just `%LOCALAPPDATA%\Programs\Munch` from your **user** `Path` in **Edit environment variables for your account**. If you installed manually elsewhere, use that location instead. Leave `%APPDATA%\tmproxy` and `%LOCALAPPDATA%\tmproxy` in place to keep your key, settings, pending events, and logs. Delete those directories only if you intend to discard their contents. The OMP plugin and its own key are separate; uninstall the plugin only if you want OMP to stop reporting too.
+
 ### No double counting and secrets
 
 - **OMP:** with omp-tm, the `omp` wrapper and `munch exec -- omp` hide every proxy variable so only the plugin reports it; without omp-tm, disable the plugin. See [Oh My Pi (omp-tm)](#oh-my-pi-omp-tm).
@@ -276,11 +318,33 @@ rm ~/.local/bin/munch
 
 ### Install a release
 
-The [Quick Start](#quick-start) installer runs on Linux and macOS (`amd64` or `arm64`). It needs `curl`, `python3`, `tar`, `mktemp`, `awk`, and either `sha256sum` or `shasum`, but not Go or `sudo`. To install somewhere else, run `MUNCH_INSTALL_DIR=/path/to/bin sh install-munch.sh`, then put that directory on your `PATH` and run `munch --version` and `munch install`.
+The [Linux and macOS installer](#linux-and-macos) runs on `amd64` and `arm64`. It needs `curl`, `python3`, `tar`, `mktemp`, `awk`, and either `sha256sum` or `shasum`, but not Go or `sudo`. To install somewhere else, run `MUNCH_INSTALL_DIR=/path/to/bin sh install-munch.sh`, then put that directory on your `PATH` and run `munch --version` and `munch install`. For the native Windows installer, see [Windows PowerShell](#windows-powershell).
 
-For a manual install, download the archive for your OS (`linux` or `darwin`) and architecture (`amd64` or `arm64`) and `SHA256SUMS` from [GitHub Releases](https://github.com/hndrxc/tokenmunchers/releases). Check the archive against the matching entry before extracting `munch` into a directory on your `PATH`.
+For a manual Unix install, download the archive for your OS (`linux` or `darwin`) and architecture (`amd64` or `arm64`) and `SHA256SUMS` from [GitHub Releases](https://github.com/hndrxc/tokenmunchers/releases). Check the archive against the matching entry before extracting `munch` into a directory on your `PATH`.
+
+#### Manual Windows install
+
+From the **same stable** `munch-vX.Y.Z` [release](https://github.com/hndrxc/tokenmunchers/releases), download `SHA256SUMS` and `munch-X.Y.Z-windows-amd64.zip` (or `munch-X.Y.Z-windows-arm64.zip` on ARM64). In the download directory, inspect `SHA256SUMS` and compare the ZIP's hash to the entry for its **exact filename**:
+
+```powershell
+$zip = 'munch-X.Y.Z-windows-amd64.zip'  # substitute the actual version and architecture
+Get-Content -LiteralPath '.\SHA256SUMS' | Select-String -SimpleMatch $zip
+Get-FileHash -LiteralPath $zip -Algorithm SHA256
+```
+
+Don't extract or run anything if the entry is missing or the hashes differ (letter case doesn't matter). If they match, extract the ZIP, which contains only `munch.exe`, to your user install directory:
+
+```powershell
+$dir = Join-Path $env:LOCALAPPDATA 'Programs\Munch'
+Expand-Archive -LiteralPath $zip -DestinationPath $dir
+& (Join-Path $dir 'munch.exe') install
+```
+
+Add the path shown by `$dir` to your user `Path` if you want to run `munch` by name in new terminals. For a manual upgrade, stop the running daemon before replacing the old `munch.exe`, then run `munch install` again.
 
 ### Update an installed release
+
+On Windows, run `munch stop` to release the running executable before replacing it. Download, review, and rerun the [PowerShell installer](#windows-powershell); it reuses your saved key and starts the daemon again. If you use `-DownloadOnly`, run `munch start` yourself afterward. The commands below are for Linux and macOS.
 
 ```bash
 munch update    # verify and install the newest stable release in place
@@ -323,7 +387,7 @@ bash .github/scripts/release-munch 0.1.3
 
 The helper pushes the release commit to `origin/main` first, then creates and pushes the annotated `munch-v0.1.3` tag in a separate push. Don't send `main` and the tag in one push: GitHub recorded only the branch run when we did that for `v0.1.0`.
 
-The tag push starts the `munch` workflow. It tests `proxy/`, builds Linux and macOS archives for `amd64` and `arm64`, and publishes them with `SHA256SUMS`. If the tag is on GitHub but no tag run appears in Actions, start the same workflow with `gh workflow run munch.yml --ref munch-v0.1.3`. If only the tag push failed, retry it with `git push --no-follow-tags origin refs/tags/munch-v0.1.3`.
+The tag push starts the `munch` workflow. It tests `proxy/` and publishes four Unix `.tar.gz` archives (Linux and macOS, each on `amd64` and `arm64`), two Windows `.zip` archives (`amd64` and `arm64`, each containing only `munch.exe`), and one `SHA256SUMS` covering all six archives. If the tag is on GitHub but no tag run appears in Actions, start the same workflow with `gh workflow run munch.yml --ref munch-v0.1.3`. If only the tag push failed, retry it with `git push --no-follow-tags origin refs/tags/munch-v0.1.3`.
 
 `munch --version` and the usage client's version both use the numeric version from the tag.
 
@@ -331,7 +395,7 @@ The tag push starts the `munch` workflow. It tests `proxy/`, builds Linux and ma
 
 The command used to be called `tmproxy`. You do not need to run `tmproxy uninstall`: `munch install` rewrites the existing `tmproxy.service` unit (or the launchd agent) to point at the new binary and reuses the same config directory, so your API key, routes, and local key carry over. Then:
 
-1. Remove any hand-added `eval "$(tmproxy env --check)"` (or fish/PowerShell equivalent) line from your shell rc; `munch install` adds its own managed block.
+1. Remove any hand-added `eval "$(tmproxy env --check)"` (or fish/PowerShell equivalent) line from your shell rc; `munch install` adds its managed block only on supported Unix shells. On Windows, [route tools from PowerShell](#windows-powershell).
 2. Delete the old `tmproxy` binary.
 
 ### Retired Claude Code and Codex plugins

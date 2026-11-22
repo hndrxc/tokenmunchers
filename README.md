@@ -26,6 +26,7 @@ Pick one or more ways to report your usage. They all feed the same leaderboard.
 ## Contents
 
 - [Getting started](#getting-started)
+- [Windows PowerShell](#windows-powershell)
 - [Everyday use](#everyday-use)
 - [Privacy](#privacy)
 - [Troubleshooting](#troubleshooting)
@@ -59,6 +60,10 @@ If OMP is installed, `munch install` offers to set up the OMP plugin for you, so
 
 `munch` sends usage metadata from routed AI tools to the dashboard. See [what Munch changes](proxy/README.md#what-munch-changes) for the files, settings, and services it touches.
 
+On Windows, follow [Windows PowerShell](#windows-powershell) below. The following steps are for Linux and macOS.
+
+##### Linux and macOS
+
 1. **Install the binary** on Linux or macOS. The installer checks the release archive's SHA-256 checksum; no Go or `sudo` required.
 
    ```bash
@@ -77,6 +82,26 @@ If OMP is installed, `munch install` offers to set up the OMP plugin for you, so
 3. **Verify.** Open a new terminal, restart any already-running AI tools, and run `munch status`. Make a request in a routed tool and look for it in the dashboard's **Activity** feed.
 
 To upgrade, run `munch update`, then `munch restart` if the background service is running. Older versions without `munch update`: re-run the installer above.
+
+#### Windows PowerShell
+
+On Windows 10 or 11 (`amd64` or `arm64`), open PowerShell 5.1 or newer. No Go or administrator account is needed. Download the installer to a file first so you can review it:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing `
+  -Uri 'https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1' `
+  -OutFile '.\install-munch.ps1'
+```
+
+After reviewing the file, run `.\install-munch.ps1`. If `RemoteSigned` blocks the downloaded file, you can unblock **only that file** after reviewing it (`Unblock-File -LiteralPath '.\install-munch.ps1'`). If policy still blocks it, use the [manual ZIP install](proxy/README.md#manual-windows-install) instead; don't change machine policy.
+
+The installer verifies the release checksum, installs to `%LOCALAPPDATA%\Programs\Munch`, and updates your user `PATH`. It runs `munch install`, which prompts for the dashboard `tm_` key from [step 2](#2-create-an-api-key) if needed. `-DownloadOnly` skips CLI setup; run `munch install` later. Open a new terminal if `munch` isn't found.
+
+Munch starts a background process but doesn't set up automatic startup or edit PowerShell profiles. After signing in again, run `munch start` if it isn't running. In your current terminal, test with `munch status` and `munch exec -- claude` (if Claude Code is installed). Send a real request and look for it in the dashboard's **Activity** feed. To route tools launched from that terminal, run `munch env --shell powershell | Out-String | Invoke-Expression` first.
+
+For Codex CLI with ChatGPT sign-in, accept the optional Codex setup in `munch install` and restart Codex; environment variables alone won't route that mode. For OMP, accept the optional plugin setup to report through the plugin, or decline and disable the existing plugin if you prefer proxy reporting. Don't use both for the same calls.
+
+On Windows, upgrade with `munch stop` and then download, review, and rerun the installer; native `munch update` isn't supported. See the [Windows guide](proxy/README.md#windows-powershell) for locations and uninstall.
 
 #### Option B: OMP plugin only
 
@@ -184,10 +209,10 @@ Type these in a terminal:
 | `munch stats` | Shows your recorded usage on this machine (`--period today`, `week` or `all`) |
 | `munch exec -- <command>` | Runs one command through the proxy, for example `munch exec -- claude` |
 | `munch env` | Prints the shell settings that route tools through the proxy |
-| `munch update` | Installs the latest stable release in place; run `munch restart` afterwards if the service is running |
+| `munch update` | Linux/macOS: installs the latest stable release in place; run `munch restart` afterwards if the service is running. Windows: stop and rerun the installer. |
 | `munch uninstall` | Stops and removes the background service, and removes munch's shell profile block and the Codex settings it added (settings you wrote or edited by hand are left for you). It keeps the `munch` binary, your saved key and settings, and the OMP plugin. See [What munch changes](proxy/README.md#what-munch-changes) |
 
-The full command list, routes and settings are in the [munch README](proxy/README.md). Its settings stay in a `tmproxy` folder (`~/.config/tmproxy/` on Linux, `~/Library/Application Support/tmproxy/` on macOS) and its service is called `tmproxy.service` (systemd) or `com.tokenmunchers.tmproxy` (launchd); those names are intentional.
+The full command list, routes and settings are in the [munch README](proxy/README.md). Its settings stay in a `tmproxy` folder (`~/.config/tmproxy/` on Linux, `~/Library/Application Support/tmproxy/` on macOS, `%APPDATA%\tmproxy` on Windows). Its Unix service is called `tmproxy.service` (systemd) or `com.tokenmunchers.tmproxy` (launchd); those names are intentional.
 
 ---
 
@@ -236,11 +261,11 @@ Backfill waits until queued calls have been delivered, so those calls don't get 
 ### munch
 
 **`munch: command not found`**
-Make sure `~/.local/bin` (or your `MUNCH_INSTALL_DIR`) is on your `PATH` and open a new terminal. If the file isn't there, run the [installer](#option-a-munch) again.
+Make sure `~/.local/bin` (or your `MUNCH_INSTALL_DIR`) is on your `PATH`. On Windows, check that `%LOCALAPPDATA%\Programs\Munch` is on your user `PATH`. Open a new terminal, or rerun the [installer](#option-a-munch) if the file isn't there.
 
 **My calls don't show up with munch**
 - Run `munch status` and check that it's running and not paused, and look at the last error.
-- Open a new terminal after `munch install`. Terminals and tools that were already running keep their old settings; restart them too.
+- Restart any already-running tools. On Linux or macOS, open a new terminal after `munch install`; on Windows, [apply routing](#windows-powershell) in the terminal you plan to use.
 - Or run a single command through the proxy to test: `munch exec -- <command>`.
 - If you use Codex signed in with ChatGPT, run `munch install` and accept the Codex setup, then restart Codex. If the installer skips it, see the [manual provider setup](proxy/README.md#4-codex-chatgpt-sign-in). An old plain-HTTP `chatgpt_base_url` can cause an HTTPS-origin error.
 
@@ -248,7 +273,7 @@ Make sure `~/.local/bin` (or your `MUNCH_INSTALL_DIR`) is on your `PATH` and ope
 Both the OMP plugin and `munch` are reporting them. Run `munch install` again and accept the omp-tm question, so OMP is reported by its plugin only. Or, to report OMP through `munch` instead, run `omp plugin disable omp-tokenmunchers`.
 
 **OMP warns `model discovery at http://127.0.0.1:8787/ (from OLLAMA_HOST) failed`**
-Open a new terminal after running `munch install`. The `omp` in that terminal runs without `OLLAMA_HOST`, so the warning goes away.
+Reload shell routing (open a new terminal on Linux/macOS or reapply the [PowerShell setup](#windows-powershell) on Windows). Run `omp` from that terminal so Munch's wrapper leaves `OLLAMA_HOST` out, or run `munch exec -- omp`.
 
 **Upgrading from the old `tmproxy` name**
 Delete the `eval "$(tmproxy env --check)"` line you added to your shell profile, and delete the old `tmproxy` binary. Then run `munch install`. It reuses your saved key and settings.

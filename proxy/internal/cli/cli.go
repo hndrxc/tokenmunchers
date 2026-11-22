@@ -199,7 +199,8 @@ func newPrompter(in io.Reader, out io.Writer, yes bool) *prompter {
 // apiKey asks for a TokenMunchers API key and checks its format. An empty
 // answer, or EOF, yields errNoKeyEntered.
 func (p *prompter) apiKey() (string, error) {
-	fmt.Fprint(p.out, "Paste your TokenMunchers API key (tm_...): ")
+	fmt.Fprintln(p.out, "Create an API key in the TokenMunchers dashboard under Settings > API keys.")
+	fmt.Fprint(p.out, "Paste your TokenMunchers API key (tm_...; input is visible): ")
 	line, err := p.in.ReadString('\n')
 	if errors.Is(err, io.EOF) {
 		fmt.Fprintln(p.out) // input ended mid-line; finish the prompt line
@@ -537,7 +538,7 @@ func (a *App) installAPIKey(p *prompter, paths config.Paths, envKey string) (str
 		return "", err
 	}
 	if src != "" {
-		a.stepf("API key", "using $%s, saved to %s (the background service can't see your shell environment)", src, paths.ConfigFile())
+		a.stepf("API key", "using $%s, saved to %s for the background daemon", src, paths.ConfigFile())
 	} else {
 		a.stepf("API key", "saved to %s", paths.ConfigFile())
 	}
@@ -582,6 +583,10 @@ func (a *App) installService(paths config.Paths, listen, bin string) (serviceOut
 	unit, err := mgr.Install(bin)
 	switch {
 	case err != nil && out.backend == "pidfile":
+		if runtime.GOOS == "windows" {
+			a.stepf("Service", "auto-start is not available: this runs in the background for your Windows login, without administrator rights, a Windows service, or a scheduled task")
+			break
+		}
 		a.stepf("Service", "auto-start is not available on this system; munch will run in the background until you stop it or restart")
 	case err != nil:
 		return out, fmt.Errorf("install %s service: %w", out.backend, err)
@@ -763,6 +768,10 @@ type shellOutcome struct {
 // that keeps it from doing so is reported and leaves wired empty.
 func (a *App) installShell(p *prompter, bin string, noShell bool, flags []envFlag) (shellOutcome, error) {
 	var out shellOutcome
+	if runtime.GOOS == "windows" {
+		a.stepf("Shell", "profile not modified; PowerShell execution policy is unchanged")
+		return out, nil
+	}
 	home, homeErr := os.UserHomeDir()
 	var profile shellrc.Profile
 	detected := false
@@ -850,11 +859,18 @@ func shellNote() string {
 // is left for the user to do.
 func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shellOutcome, cx codexOutcome, flags []envFlag) {
 	fmt.Fprintf(a.Stdout, "\nmunch is running on http://%s (%s).\n", cfg.ListenAddr, svc.backend)
-	if !svc.autoStart {
+	windows := runtime.GOOS == "windows"
+	kind := detectShell()
+	args := shellEnvArgs(kind, flags)
+	if windows && !svc.autoStart {
+		fmt.Fprintf(a.Stdout, "The background daemon stops at Windows logout or reboot. Run `munch start%s` after logging in again.\n", args)
+	} else if !svc.autoStart {
 		fmt.Fprintln(a.Stdout, "It does not start by itself after a reboot or logout; run `munch start` then.")
 	}
-	kind := detectShell()
-	if sh.wired != "" {
+	if windows {
+		fmt.Fprintf(a.Stdout, "\nTo route supported tools launched from this PowerShell session, run:\n\n  %s\n\n", envHookLine(kind, flags))
+		fmt.Fprintf(a.Stdout, "Or route just one Claude Code launch, without changing this shell's environment:\n\n  munch exec%s -- claude\n\n", args)
+	} else if sh.wired != "" {
 		fmt.Fprintf(a.Stdout, "New shells route Claude Code, Codex, Gemini and other AI tools through it (set up in %s).\n", sh.wired)
 	} else {
 		where := sh.where
@@ -867,7 +883,9 @@ func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shel
 		fmt.Fprintf(a.Stdout, "To route AI tools through it, add this line to %s:\n\n  %s\n\n", where, envHookLine(kind, flags))
 	}
 	if cfg.OMPViaPlugin {
-		if sh.wired != "" {
+		if windows {
+			fmt.Fprintln(a.Stdout, "OMP reports through omp-tm. The PowerShell command above also defines an `omp` function that runs it without the proxy variables to avoid counting calls twice.")
+		} else if sh.wired != "" {
 			fmt.Fprintln(a.Stdout, "OMP reports through omp-tm, and new shells run `omp` without the proxy variables, so its calls are counted once.")
 		} else {
 			fmt.Fprintln(a.Stdout, "OMP reports through omp-tm, and that line also defines an `omp` function that runs it without the proxy variables, so its calls are counted once.")
@@ -875,17 +893,26 @@ func (a *App) printInstallSummary(cfg config.Config, svc serviceOutcome, sh shel
 	} else if ompOnPath() {
 		// OMP keeps only host:port of OLLAMA_HOST, so the private route would
 		// be lost and its Ollama discovery would fail against the proxy root.
-		if sh.wired != "" {
+		if windows {
+			fmt.Fprintln(a.Stdout, "The PowerShell command above also defines an `omp` function that leaves out OLLAMA_HOST so OMP can talk to local Ollama directly.")
+		} else if sh.wired != "" {
 			fmt.Fprintln(a.Stdout, "OMP is proxied, but gets no OLLAMA_HOST: it would drop the private route, so it talks to local Ollama directly.")
 		} else {
 			fmt.Fprintln(a.Stdout, "OMP is proxied, but that line also defines an `omp` function that leaves out OLLAMA_HOST: OMP would drop the private route, so it talks to local Ollama directly.")
 		}
 	}
 	switch {
+	case windows && cx.routed != "":
+		fmt.Fprintf(a.Stdout, "Codex signed in with ChatGPT uses the Munch provider in %s, not the PowerShell environment above. Start a new Codex process to pick up the provider setting.\n", cx.routed)
 	case cx.routed != "":
 		fmt.Fprintf(a.Stdout, "Codex signed in with ChatGPT is routed through it too (Munch provider in %s); start a new Codex process to pick that up.\n", cx.routed)
 	case cx.unrouted:
 		fmt.Fprintln(a.Stdout, "Codex signed in with ChatGPT is not routed through it; run `munch install` again to set that up, or follow the manual Codex steps in the proxy README.")
+	}
+	if windows {
+		fmt.Fprintln(a.Stdout, "Already running apps keep their old environment. The PowerShell routing command applies only to this session and tools launched from it.")
+		fmt.Fprintf(a.Stdout, "To verify, run `munch status%s`, then send a request from a routed tool and look for it in the dashboard under Activity.\n", args)
+		return
 	}
 	if sh.wired != "" {
 		fmt.Fprintln(a.Stdout, "Open a new terminal to pick this up: shells and apps that are already running keep their old environment.")
@@ -925,6 +952,9 @@ func (a *App) cmdUninstall(args []string) error {
 // have written, and points out hooks the user added by hand, which it cannot
 // safely remove.
 func (a *App) removeShellHooks() error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "warning: cannot find your home directory, so shell profiles were not checked: %v\n", err)
@@ -1331,18 +1361,23 @@ func ompEnvWrapper(sh string, unset bool, names []string) string {
 // for shell (as reported by detectShell), repeating the install flags that tell
 // `munch env` where the proxy is.
 func envHookLine(shell string, flags []envFlag) string {
+	args := shellEnvArgs(shell, flags)
+	switch shell {
+	case "fish":
+		return "munch env --check --shell fish" + args + " | source"
+	case "powershell":
+		return "munch env --shell powershell" + args + " | Out-String | Invoke-Expression"
+	default:
+		return `eval "$(munch env --check` + args + `)"`
+	}
+}
+
+func shellEnvArgs(shell string, flags []envFlag) string {
 	var args strings.Builder
 	for _, f := range flags {
 		args.WriteString(" " + f.name + " " + quoteArg(shell, f.value))
 	}
-	switch shell {
-	case "fish":
-		return "munch env --check --shell fish" + args.String() + " | source"
-	case "powershell":
-		return "munch env --shell powershell" + args.String() + " | Out-String | Invoke-Expression"
-	default:
-		return `eval "$(munch env --check` + args.String() + `)"`
-	}
+	return args.String()
 }
 
 // quoteArg quotes s as one word of shell syntax: unchanged when plainly safe,

@@ -76,7 +76,15 @@ jobs:
             done
           done
           rm "$dist/munch"
-          ( cd "$dist" && sha256sum munch-*.tar.gz > SHA256SUMS )
+          for goarch in amd64 arm64; do
+            GOOS=windows GOARCH="${goarch}" CGO_ENABLED=0 \
+              go build -trimpath \
+                -ldflags="-s -w -X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=${VERSION}" \
+                -o "$dist/munch.exe" ./cmd/munch
+            ( cd "$dist" && zip "munch-${VERSION}-windows-${goarch}.zip" munch.exe )
+          done
+          rm "$dist/munch.exe"
+          ( cd "$dist" && sha256sum munch-*.tar.gz munch-*.zip > SHA256SUMS )
 
       - uses: actions/upload-artifact@v4
         with:
@@ -84,9 +92,50 @@ jobs:
           path: ${{ runner.temp }}/munch-release/
           if-no-files-found: error
 
+  windows-smoke:
+    name: Smoke test Windows CLI
+    needs: build
+    # The release build is skipped on branches and PRs.
+    if: ${{ !cancelled() && (needs.build.result == 'success' || !startsWith(github.ref, 'refs/tags/munch-v')) }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        if: ${{ !startsWith(github.ref, 'refs/tags/munch-v') }}
+        with:
+          go-version-file: proxy/go.mod
+          cache: false
+
+      - name: Compile native munch CLI
+        if: ${{ !startsWith(github.ref, 'refs/tags/munch-v') }}
+        working-directory: proxy
+        shell: powershell
+        run: go build -o "$env:RUNNER_TEMP\munch.exe" ./cmd/munch
+
+      - uses: actions/download-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/munch-v')
+        with:
+          name: munch-release-assets
+          path: ${{ runner.temp }}/munch-release
+
+      - name: Exercise native Windows CLI
+        shell: powershell
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/munch-v*') {
+            & .github/scripts/smoke-munch-windows.ps1 -AssetDirectory "$env:RUNNER_TEMP\munch-release" -Version ($env:GITHUB_REF_NAME -replace '^munch-v', '')
+          } else {
+            & .github/scripts/smoke-munch-windows.ps1 -Binary "$env:RUNNER_TEMP\munch.exe"
+          }
+
   publish:
     name: Publish GitHub release
-    needs: build
+    needs: [build, windows-smoke]
     if: startsWith(github.ref, 'refs/tags/munch-v')
     runs-on: ubuntu-latest
     permissions:
@@ -103,7 +152,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          notes="### Install on Windows
+
+          Follow the [Windows PowerShell install guide](https://github.com/${GH_REPO}/blob/main/proxy/README.md#windows-powershell). The amd64 and arm64 Windows ZIPs and the shared SHA256SUMS file are available in the assets below.
+          "
           gh release create "${GITHUB_REF_NAME}" \
-            dist/munch-*.tar.gz dist/SHA256SUMS \
+            dist/munch-*.tar.gz dist/munch-*.zip dist/SHA256SUMS \
             --verify-tag \
+            --notes "$notes" \
             --generate-notes
