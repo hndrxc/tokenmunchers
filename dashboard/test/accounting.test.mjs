@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { addEvent, addNullable, byUser, combineSpend, dailyByUser, emptySpend, emptyTotals, metricOf, normalizeSpend } from '../lib/stats.ts';
+import { addEvent, addNullable, byUser, combineSpend, dailyByUser, emptySpend, emptyTotals, metricOf, normalizeSpend, tokenAttributionNote } from '../lib/stats.ts';
 import { spendNote, tokens, usd } from '../lib/format.ts';
 test('unknown values survive normalization, aggregate additions and live OMP updates',()=>{
   const unknown={...emptyTotals('user'),total_tokens:null,output_tokens:null,cost_usd:null,call_count:null,unpriced_tokens:null,has_unknown_cost:true,has_reconstructed:true};
@@ -63,4 +63,63 @@ test('per-user and realtime accounting show known spend without changing strict 
   const zero=addEvent({}, {...event,cost_usd:0}).user;
   assert.equal(zero.cost_usd,0);
   assert.equal(metricOf(zero,'cost',true),0);
+});
+
+test('mixed attribution shows only a floored subagent share or a known-main annotation',()=>{
+  const mixed=byUser([{
+    ...emptyTotals('user'),total_tokens:'1000',subagent_tokens:null,
+    known_subagent_tokens:'129',known_main_tokens:'400',
+  }]).user;
+  assert.equal(mixed.known_subagent_tokens,129);
+  assert.equal(mixed.known_main_tokens,400);
+  assert.equal(metricOf(mixed,'tokens',true),1000);
+  assert.equal(metricOf(mixed,'tokens',false),null);
+  assert.deepEqual(tokenAttributionNote(mixed,true),{kind:'lower-bound',percent:'≥12%'});
+  assert.deepEqual(tokenAttributionNote(mixed,false),{kind:'known-main',tokens:400});
+  assert.deepEqual(tokenAttributionNote({...mixed,known_subagent_tokens:290},true),{kind:'lower-bound',percent:'≥29%'});
+  assert.deepEqual(tokenAttributionNote({...mixed,known_subagent_tokens:9},true),{kind:'unknown-share',tokens:9});
+  assert.deepEqual(tokenAttributionNote({...mixed,known_subagent_tokens:0},true),{kind:'unknown-share',tokens:null});
+  const unknownTotal={...mixed,total_tokens:null};
+  assert.equal(metricOf(unknownTotal,'tokens',true),null);
+  assert.equal(metricOf(unknownTotal,'tokens',false),null);
+  assert.deepEqual(tokenAttributionNote(unknownTotal,true),{kind:'unknown-share',tokens:129});
+  assert.deepEqual(tokenAttributionNote(unknownTotal,false),{kind:'known-main',tokens:400});
+  assert.equal(tokenAttributionNote({...mixed,known_main_tokens:0},false),null);
+});
+
+test('exact attribution retains rounding and hides known zero without coverage fields',()=>{
+  const exact={...emptyTotals('user'),total_tokens:1000,known_subagent_tokens:null,known_main_tokens:null};
+  assert.equal(tokenAttributionNote(exact,true),null);
+  assert.equal(tokenAttributionNote(undefined,true),null);
+  const subagents={...exact,subagent_tokens:129};
+  assert.equal(metricOf(subagents,'tokens',false),871);
+  assert.equal(tokenAttributionNote(subagents,false),null);
+  assert.deepEqual(tokenAttributionNote(subagents,true),{kind:'exact-share',percent:'13%'});
+  assert.deepEqual(tokenAttributionNote({...subagents,subagent_tokens:9},true),{kind:'exact-share',percent:'<1%'});
+  assert.deepEqual(tokenAttributionNote({...subagents,total_tokens:null},true),{kind:'unknown-share',tokens:129});
+});
+
+test('live classified events add known counts but cannot recover old snapshot coverage',()=>{
+  const subagent={user_id:'user',input_tokens:10,output_tokens:10,cache_read_tokens:0,cache_write_tokens:0,total_tokens:20,cost_usd:1,is_subagent:true};
+  const main={...subagent,is_subagent:false};
+  const base={...emptyTotals('user'),total_tokens:100,subagent_tokens:null};
+  const {known_subagent_tokens: _subagent,known_main_tokens: _main,...legacy}=base;
+  for(const row of [legacy,{...legacy,known_subagent_tokens:null,known_main_tokens:null}]){
+    const updated=addEvent(addEvent(byUser([row]),subagent),main).user;
+    assert.equal(updated.known_subagent_tokens,null);
+    assert.equal(updated.known_main_tokens,null);
+    assert.deepEqual(tokenAttributionNote(updated,true),{kind:'unknown-share',tokens:null});
+    assert.equal(tokenAttributionNote(updated,false),null);
+  }
+  const covered=byUser([{...base,known_subagent_tokens:'10',known_main_tokens:'15'}]);
+  const updated=addEvent(addEvent(covered,subagent),main).user;
+  assert.equal(updated.total_tokens,140);
+  assert.equal(updated.known_subagent_tokens,30);
+  assert.equal(updated.known_main_tokens,35);
+  assert.equal(metricOf(updated,'tokens',false),null);
+  assert.deepEqual(tokenAttributionNote(updated,true),{kind:'lower-bound',percent:'≥21%'});
+  const first=addEvent({},main).user;
+  assert.equal(first.known_subagent_tokens,0);
+  assert.equal(first.known_main_tokens,20);
+  assert.equal(metricOf(first,'tokens',false),20);
 });

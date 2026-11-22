@@ -10,7 +10,7 @@ import { DailyBars } from "@/components/DailyBars";
 import { Sparkline } from "@/components/Sparkline";
 import { activityFromIngest, mergeActivity, type ActivityCall } from "@/lib/activity";
 import { ago, duration, model, spendNote, tokens, usd } from "@/lib/format";
-import { addEvent, addNullable, combineSpend, dailyByUser, emptySpend, LIVE_WINDOW_MS, metricOf, normalizeEvent, utcDay } from "@/lib/stats";
+import { addEvent, addNullable, combineSpend, dailyByUser, emptySpend, LIVE_WINDOW_MS, metricOf, normalizeEvent, tokenAttributionNote, utcDay } from "@/lib/stats";
 import { createClient } from "@/lib/supabase/client";
 import { subscribeAuthed } from "@/lib/supabase/realtime";
 import type { DailyRow, LiveSession, Profile, Totals } from "@/lib/types";
@@ -170,7 +170,13 @@ export function Dashboard(props: DashboardProps) {
     return Object.values(profiles)
       .map((profile) => {
         const t = totals[profile.id];
-        return { profile, t, value: metricOf(t, metric, includeSubagents), note: metric === "cost" && t ? spendNote(t) : "" };
+        return {
+          profile,
+          t,
+          value: metricOf(t, metric, includeSubagents),
+          note: metric === "cost" && t ? spendNote(t) : "",
+          attribution: metric === "tokens" ? tokenAttributionNote(t, includeSubagents) : null,
+        };
       })
       .sort((a, b) => (a.value === null ? b.value === null ? 0 : 1 : b.value === null ? -1 : b.value - a.value) || a.profile.display_name.localeCompare(b.profile.display_name));
   }, [profiles, totals, metric, includeSubagents]);
@@ -290,7 +296,7 @@ export function Dashboard(props: DashboardProps) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map(({ profile: p, t, value, note }, i) => (
+                {rows.map(({ profile: p, t, value, note, attribution }, i) => (
                   <tr key={p.id} style={value === 0 ? { opacity: 0.55 } : undefined}>
                     <td className="rank">{value !== null && value > 0 ? i + 1 : "–"}</td>
                     <td>
@@ -319,9 +325,20 @@ export function Dashboard(props: DashboardProps) {
                       <span className="value">{metric === "tokens" ? tokens(value) : t ? usd(value) : "–"}</span>
                       {note && <div className="sub">{note}</div>}
                       {t?.has_reconstructed && <div className="sub">includes reconstruction</div>}
-                      {metric === "tokens" && includeSubagents && t && t.subagent_tokens !== null && t.total_tokens !== null && t.subagent_tokens > 0 && (
-                        <div className="sub" title="Share from subagent / swarm calls">
-                          {pct(t.subagent_tokens, t.total_tokens)} subagent
+                      {attribution?.kind === "known-main" && (
+                        <div className="sub">Known main: {tokens(attribution.tokens)}</div>
+                      )}
+                      {attribution?.kind === "exact-share" && (
+                        <div className="sub" title="Share from subagent / swarm calls">{attribution.percent} subagent</div>
+                      )}
+                      {attribution?.kind === "lower-bound" && (
+                        <div className="sub" title="Subagent attribution is incomplete">
+                          {attribution.percent} subagent<span className="visually-hidden">; subagent attribution is incomplete</span>
+                        </div>
+                      )}
+                      {attribution?.kind === "unknown-share" && (
+                        <div className="sub">
+                          Subagent share unknown{attribution.tokens !== null && ` · Known subagent: ${tokens(attribution.tokens)}`}
                         </div>
                       )}
                     </td>
@@ -398,9 +415,4 @@ function Seg<T extends string>({
       ))}
     </div>
   );
-}
-
-function pct(part: number, whole: number): string {
-  const p = (part / Math.max(1, whole)) * 100;
-  return p > 0 && p < 1 ? "<1%" : `${Math.round(p)}%`;
 }

@@ -43,6 +43,8 @@ For mixed usage, the dashboard shows known spend alongside unpriced token covera
 
 Unavailable token and call counts are shown as **Unknown**, never zero, and unavailable leaderboard metrics are unranked. Unknown token counts propagate in group totals, daily charts and model mix. Unknown chart days have `?` markers (and explicit table values); muted sparkline bars indicate unavailable days, not measured usage. Reconstructed usage is labeled, not turned into invented calls. A day with recorded usage can establish activity even when its total is unavailable; “Biggest day” remains unknown if any daily total is unavailable.
 
+When attribution is incomplete, **Main only** remains **Unknown** and unranked; a **Known main** note shows any positively identified main tokens without treating them as the total. In **+ subagents**, an exact total can still be ranked. When the exact subagent share is unavailable, the dashboard shows a whole-percent lower bound (`≥N% subagent`) if known subagent tokens are at least 1% of the total. Otherwise it shows **Subagent share unknown**, with the known subagent token count when positive. These notes never assign missing attribution to either kind of usage.
+
 
 ## Local development
 
@@ -62,7 +64,7 @@ For sign-in to work locally, `http://localhost:3000/**` must be in the Supabase 
 
 ## Deploying
 
-Apply the [Supabase migrations](../supabase/README.md#deploying) before deploying this dashboard version: it expects the Activity RPC and spend coverage fields. This change does not include a production deployment.
+Apply the [Supabase migrations](../supabase/README.md#deploying) before deploying this dashboard version. Apply [`20261122020000_known_token_attribution.sql`](../supabase/migrations/20261122020000_known_token_attribution.sql) after the Activity and known-spend migrations; it adds `known_subagent_tokens` and `known_main_tokens` to the leaderboard RPCs. During rollout, an older snapshot can still show exact values but cannot supply missing known-count coverage, even after a Realtime update. This change does not include a production deployment.
 
 The dashboard is a standard Next.js app. To deploy on Vercel:
 

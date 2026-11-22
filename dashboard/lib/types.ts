@@ -28,6 +28,9 @@ export interface Totals extends AccountingQuality, Spend {
   cache_write_tokens: number | null;
   total_tokens: number | null;
   subagent_tokens: number | null;
+  // Optional during rollout; null means coverage for the snapshot is unavailable.
+  known_subagent_tokens?: number | null;
+  known_main_tokens?: number | null;
   cost_usd: number | null;
 }
 

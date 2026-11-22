@@ -60,6 +60,8 @@ export function emptyTotals(user_id: string): Totals {
     cache_write_tokens: 0,
     total_tokens: 0,
     subagent_tokens: 0,
+    known_subagent_tokens: 0,
+    known_main_tokens: 0,
     cost_usd: 0,
     ...emptySpend(),
   };
@@ -78,6 +80,8 @@ export function byUser(rows: Totals[] | null): Record<string, Totals> {
       cache_write_tokens: numberOrNull(r.cache_write_tokens),
       total_tokens: numberOrNull(r.total_tokens),
       subagent_tokens: numberOrNull(r.subagent_tokens),
+      known_subagent_tokens: numberOrNull(r.known_subagent_tokens ?? null),
+      known_main_tokens: numberOrNull(r.known_main_tokens ?? null),
       cost_usd: numberOrNull(r.cost_usd),
     };
   }
@@ -99,6 +103,9 @@ export function addEvent(map: Record<string, Totals>, e: UsageEvent): Record<str
       cache_write_tokens: addNullable(prev.cache_write_tokens, e.cache_write_tokens),
       total_tokens: addNullable(prev.total_tokens, e.total_tokens),
       subagent_tokens: addNullable(prev.subagent_tokens, e.is_subagent ? e.total_tokens : 0),
+      // Realtime only extends the snapshot; it can't recover missing historical coverage.
+      known_subagent_tokens: addNullable(prev.known_subagent_tokens ?? null, e.is_subagent === true ? e.total_tokens : 0),
+      known_main_tokens: addNullable(prev.known_main_tokens ?? null, e.is_subagent === false ? e.total_tokens : 0),
       cost_usd: addNullable(prev.cost_usd, cost),
       known_cost_usd: Number(prev.known_cost_usd ?? 0) + cost,
     },
@@ -110,6 +117,36 @@ export function metricOf(t: Totals | undefined, metric: "tokens" | "cost", inclu
   if (metric === "cost") return t.known_cost_usd;
   if (includeSubagents) return t.total_tokens;
   return t.total_tokens === null || t.subagent_tokens === null ? null : t.total_tokens - t.subagent_tokens;
+}
+
+type TokenAttributionNote =
+  | { kind: "known-main"; tokens: number }
+  | { kind: "exact-share" | "lower-bound"; percent: string }
+  | { kind: "unknown-share"; tokens: number | null };
+
+/** Supplemental display only: partial counts never replace the ranking metric. */
+export function tokenAttributionNote(t: Totals | undefined, includeSubagents: boolean): TokenAttributionNote | null {
+  if (!t) return null;
+  const { total_tokens, subagent_tokens } = t;
+  const exact = total_tokens !== null && subagent_tokens !== null;
+  if (!includeSubagents) {
+    const main = t.known_main_tokens ?? 0;
+    return !exact && main > 0 ? { kind: "known-main", tokens: main } : null;
+  }
+  if (exact) {
+    if (subagent_tokens <= 0) return null;
+    const percent = (subagent_tokens / Math.max(1, total_tokens)) * 100;
+    return { kind: "exact-share", percent: percent < 1 ? "<1%" : `${Math.round(percent)}%` };
+  }
+
+  const known = subagent_tokens ?? t.known_subagent_tokens ?? 0;
+  if (known > 0 && total_tokens !== null && total_tokens > 0 &&
+      Number.isSafeInteger(known) && Number.isSafeInteger(total_tokens)) {
+    // Use exact division and decline to make a bound from potentially rounded SQL bigint values.
+    const floor = (BigInt(known) * 100n) / BigInt(total_tokens);
+    if (floor > 0n) return { kind: "lower-bound", percent: `≥${floor}%` };
+  }
+  return { kind: "unknown-share", tokens: known > 0 ? known : null };
 }
 
 /**

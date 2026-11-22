@@ -83,6 +83,7 @@ try {
   assert.equal((await totals()).total_tokens,null);
   assert.equal((await totals()).call_count,null);
   assert.equal((await totals()).has_reconstructed,true);
+  assert.equal(Number((await totals()).known_main_tokens),360,'classified rows with missing token totals do not erase measured main tokens');
   const daily = (await db.query('select total_tokens,call_count,cost_usd from public.usage_daily_all where user_id=$1',[uid])).rows;
   assert.ok(daily.some(r=>r.total_tokens===null && r.call_count===null && r.cost_usd===null));
   await publish([],{superseded_canonical_ids:['legacy']});
@@ -141,6 +142,7 @@ try {
   assert.equal(Number((await totals()).total_tokens),480);
   const since = (await db.query('select * from public.leaderboard_since($1) where user_id=$2',[cutoff,uid])).rows[0];
   assert.equal(Number(since.total_tokens),120,'old post-cutoff recovery is not subject to OMP seven-day limit');
+  assert.equal(Number(since.known_main_tokens),120,'the inclusive collector cutoff also bounds known main tokens');
   const dailyParts = (await db.query('select has_unknown_tokens,has_unknown_calls,has_unknown_cost from public.usage_daily_all where user_id=$1',[uid])).rows;
   assert.ok(dailyParts.some(r=>r.has_unknown_cost));
   // Preserve OMP's exact-today versus past-rollup split alongside collector rows.
@@ -148,16 +150,36 @@ try {
   await db.query("insert into public.usage_daily(user_id,day,provider,model,is_subagent,call_count,input_tokens,total_tokens) values($1,(now() at time zone 'utc')::date,'omp','omp-model',false,1,7,7),($1,(now() at time zone 'utc')::date-1,'omp','omp-model',false,1,5,5)",[uid]);
   await db.query("insert into public.usage_history(user_id,device_id,day,provider,model,is_subagent,call_count,input_tokens) values($1,$2,'2025-12-31','omp','omp-model',false,1,9)",[uid,randomUUID()]);
   assert.equal(Number((await totals()).total_tokens),501,'today raw OMP events and their rollup count once');
+  // Old raw OMP rows must stay out of range even when the collector cutoff includes them.
+  await db.query("insert into public.usage_events(event_id,user_id,session_id,ts,provider,model,input_tokens) values($1,$2,'omp-old-smoke',$3,'omp','omp-model',17)",[randomUUID(),uid,cutoff]);
+  // Place the unclassified observation after the raw OMP event and the classified observation.
+  const attributionCutoff = new Date((await db.query(
+    "select date_trunc('second',now()) + interval '1 second' as ts",
+  )).rows[0].ts).toISOString();
   await publish([
-    observation('estimated-subagent',{timestamp:new Date().toISOString(),input_tokens:10,output_tokens:1,is_subagent:true,cost_usd:0.5,cost_basis:'estimated'}),
-    observation('unknown-attribution',{timestamp:new Date().toISOString(),input_tokens:0,output_tokens:0,is_subagent:null,cost_usd:0,cost_basis:'reported'}),
+    observation('estimated-subagent',{timestamp:new Date(Date.parse(attributionCutoff)-1000).toISOString(),input_tokens:10,output_tokens:1,is_subagent:true,cost_usd:0.5,cost_basis:'estimated'}),
+    observation('unknown-attribution',{timestamp:attributionCutoff,input_tokens:13,output_tokens:0,is_subagent:null,cost_usd:0,cost_basis:'reported'}),
   ]);
-  assert.equal(Number((await totals()).total_tokens),512);
+  assert.equal(Number((await totals()).total_tokens),525);
   assert.equal((await totals()).has_estimated_cost,true);
   assert.equal((await totals()).subagent_tokens,null,'unknown attribution cannot create an exact main-only total');
   // Member reads work; no client writes or access to staged payloads/RPC.
   await db.exec(`set role authenticated; set request.jwt.claim.sub='${uid}';`);
   assert.equal((await db.query('select * from public.leaderboard_all_time()')).rows.length,1);
+  const attributionFields = `total_tokens::int, subagent_tokens::int, known_subagent_tokens::int, known_main_tokens::int`;
+  const attribution = (total_tokens,subagent_tokens,known_subagent_tokens,known_main_tokens) =>
+    ({total_tokens,subagent_tokens,known_subagent_tokens,known_main_tokens});
+  const attributedUsage = async (source, ...args) => (await db.query(
+    `select ${attributionFields} from public.${source} where user_id=$1`, [uid,...args],
+  )).rows[0];
+  assert.deepEqual(await attributedUsage('leaderboard_all_time()'),attribution(525,null,11,501),
+    'all-time includes history, past rollups, and today’s raw events only once');
+  assert.deepEqual(await attributedUsage('leaderboard_since($2)',cutoff),attribution(151,null,11,127),
+    'since includes older post-cutoff collector usage, but not older raw OMP events or rollups');
+  assert.deepEqual(await attributedUsage('leaderboard()'),attribution(31,null,11,7),
+    'the default week wrapper retains strict nulls and returns only in-window classified tokens');
+  assert.deepEqual(await attributedUsage('leaderboard_since($2)',attributionCutoff),attribution(13,null,0,0),
+    'unclassified positive tokens contribute to the total but to neither classified count');
   const grants = (await db.query("select has_table_privilege('authenticated','public.collector_contributions','insert') writes,has_function_privilege('authenticated','public.publish_contributions(text,jsonb)','execute') rpc")).rows[0];
   assert.equal(grants.writes,false); assert.equal(grants.rpc,false);
   assert.equal((await db.query("select has_table_privilege('authenticated','private.contribution_retirements','select') readable")).rows[0].readable,false);
@@ -168,6 +190,7 @@ try {
   await db.exec('set role tokenmunchers_discord_reader;');
   const bot = (await db.query("select * from public.discord_leaderboard('all')")).rows[0];
   assert.equal(bot.cost_usd,null,'bot wrapper must preserve unknown cost');
+  assert.equal(bot.subagent_tokens,null,'bot wrapper must preserve unknown attribution');
   assert.equal((await db.query("select has_table_privilege('tokenmunchers_discord_reader','public.collector_contributions','select') readable")).rows[0].readable,false);
   await db.exec('reset role;');
   // Large staged snapshot: begin + 59 chunks spend one whole shared minute (60 requests x 10 of 600 hits).
