@@ -71,3 +71,11 @@ test('rate-limited publication exposes reset-aware Retry-After in header and bod
   for(const [error,status] of [['invalid_key',401],['ownership_conflict',409],['cutoff_conflict',409],['stale_snapshot',409],['incomplete_snapshot',400],['invalid_index',400]]) assert.equal(publicationResponse({error}).status,status,error);
   assert.equal(publicationResponse({ok:true,action:'commit'}).status,200);
 });
+test('backfill_from is begin-only, codex-only, strict, and strictly before cutoff',()=>{
+  const beginReq=(overrides={})=>({...common,action:'begin',cutoff:'2026-01-01T00:00:00Z',chunk_count:1,...overrides});
+  assert.equal(validateRequest(beginReq({backfill_from:'2025-12-31T00:00:00Z'})),null);
+  assert.match(validateRequest(beginReq({backfill_from:'2025-12-31T00:00:00Z',harness:'claude-code'})),/codex/);
+  for(const from of ['2026-01-01T00:00:00Z','2026-01-02T00:00:00Z','2026-02-30T00:00:00Z',null,'not-a-date','2025-12-31T00:00:00+02:00',0,Infinity]) assert.notEqual(validateRequest(beginReq({backfill_from:from})),null,`rejects from=${from}`);
+  assert.notEqual(validateRequest({...chunk(),backfill_from:'2025-12-31T00:00:00Z'}),null,'chunk carries no backfill_from');
+  assert.notEqual(validateRequest({...common,action:'commit',backfill_from:'2025-12-31T00:00:00Z'}),null,'commit carries no backfill_from');
+});

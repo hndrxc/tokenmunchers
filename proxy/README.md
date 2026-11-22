@@ -122,6 +122,28 @@ Then restart Codex (start a new `codex` process) and make a request. `requires_o
 - **What is and isn't routed:** this sends Codex's model responses through `munch` with your existing ChatGPT sign-in; other first-party ChatGPT functionality is not claimed to be routed, and the default backend is still used for account discovery. Sign-in itself still happens directly with OpenAI, and the proxy serves HTTP/SSE only — it rejects WebSocket upgrades (HTTP 426). Only calls that actually go through the proxy are recorded.
 - **Using an API key instead?** Codex then talks to the `openai` route: set `openai_base_url` in `~/.codex/config.toml` to the same URL `munch env` exports as `OPENAI_BASE_URL` for other OpenAI-compatible clients.
 
+### Codex history backfill
+
+`munch backfill` previews usage locally. It reads retained Codex `sessions/` and `archived_sessions/` rollouts (`.jsonl` and `.jsonl.zst`), not the proxy log. It uses `$CODEX_HOME` or `~/.codex` unless you pass `--codex-home`. Run it separately for each independently verified source.
+
+Before uploading, establish a UTC interval in which **none** of that source's selected history could have gone through Munch, including archives copied into it. Use independent evidence such as dated routing or deployment records covering both ChatGPT sign-in and API-key routes. A first retained proxy event or a file modification time does not establish this. If the evidence is incomplete, narrow the interval or don't upload. `--from` is inclusive and `--before` is exclusive; neither can be in the future.
+
+```bash
+munch backfill  # local diagnostic preview; no window means no eligible records
+
+# Example dates only: substitute the verified boundaries for your Codex home.
+munch backfill --from 2026-10-18T00:00:00Z --before 2026-11-17T00:00:00Z
+munch backfill --from 2026-10-18T00:00:00Z --before 2026-11-17T00:00:00Z --upload
+```
+
+`--upload` prints the same preview before asking for an explicit `yes` (default no; no `--yes` option). The daemon need not be running. Upload uses your Munch API key and the configured server's `/functions/v1/contributions` endpoint. It sends response and session identifiers, recorded UTC timestamps, contextual model/provider and agent attribution when known, and disjoint token counts. It never sends transcripts, prompts, responses, or file paths. Cost is unknown.
+
+Only observed per-response usage qualifies. Cumulative counters, embedded checkpoints and usage on or after the cutoff are not imported. If an observed record shows that the managed `munch_chatgpt` provider was used before `--before`, the whole window is withheld. Preview never contacts the server, so it cannot account for previously accepted identities or ambiguous overlap with the retired collector. The server preserves those rows and reports how many records the snapshot accepted.
+
+The first confirmed upload fixes the window for that Codex home in Munch's state directory. If interrupted, rerun with the same window; unchanged records replay the same snapshot. Staged chunks are not visible before commit, and pruning rollouts never deletes usage already accepted. This does not recover post-cutover gaps or import Claude Code history.
+
+The server needs the [Codex backfill migration and updated contributions function](../supabase/README.md#deploying). [Format and overlap research](../docs/claude-codex-backfill.md#8-munch-issue-4-observed-codex-import).
+
 ---
 
 ## What Munch changes
@@ -150,6 +172,7 @@ Source builds on other systems use Go's user config and cache directories plus `
 | `<config>/prices.json` | Only if you create it ([pricing](#custom-model-pricing-pricesjson)) |
 | `<state>/queue.jsonl` (`0600`) | Events awaiting delivery; renamed to `queue.jsonl.<pid>.<n>.flushing` while sending, deleted once delivered |
 | `<state>/usage.jsonl` (`0600`) | One metadata line per recorded call, for `munch stats`; never trimmed or deleted by Munch |
+| `<state>/backfill-source-*.json` (`0600`) | Random upload source UUID and fixed window per Codex home; created only after upload confirmation. No records, API key, or source path. |
 | `<state>/tmproxy.log`, `<state>/tmproxy.pid` | Daemon output under launchd and the fallback (systemd uses `journalctl --user -u tmproxy`); PID file for the fallback only, removed on stop |
 
 ### Installer script and `munch login`
@@ -215,8 +238,8 @@ rm ~/.local/bin/munch
 ### No double counting and secrets
 
 - **OMP:** with omp-tm, the `omp` wrapper and `munch exec -- omp` hide every proxy variable so only the plugin reports it; without omp-tm, disable the plugin. See [Oh My Pi (omp-tm)](#oh-my-pi-omp-tm).
-- **Codex signed in with ChatGPT** ignores the proxy variables, so only the selected Munch provider routes it. [Uninstall the retired plugins](#retired-claude-code-and-codex-plugins), which would report the same calls. Only calls through the proxy are recorded.
-- **API key:** stored in `config.json`, copied to omp-tm only if you choose it, sent only to the ingest URL, and never printed (`login` and `status` say only whether one is configured).
+- **Codex signed in with ChatGPT** ignores the proxy variables, so only the selected Munch provider routes it. [Uninstall the retired plugins](#retired-claude-code-and-codex-plugins), which would report the same calls. Backfill is limited to independently verified pre-proxy usage.
+- **API key:** stored in `config.json`, copied to omp-tm only if you choose it, and never printed. Munch uses it for ingest and, after confirmation, contributions on the same server.
 - **Private URLs** from `local-auth.key` appear only in `munch env` output, `munch routes --show-local-urls`, shell and `exec` environments, and Codex's `config.toml`. Provider credentials pass through to the upstream only. See [Privacy & Security](#privacy--security).
 
 ---

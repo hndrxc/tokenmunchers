@@ -149,7 +149,7 @@ You'll see a preview (number of calls, total tokens, date range, and projects) b
 
 Only daily totals per model are uploaded. Running it again replaces your previous upload, so it's safe to repeat.
 
-Claude Code and Codex history import isn't available at the moment. `munch` records those tools from the moment they are routed through it.
+For Codex, run `munch backfill` in your shell. It previews retained per-response usage locally; uploading requires an independently verified pre-proxy window for that Codex home and explicit confirmation. See [Codex history backfill](proxy/README.md#codex-history-backfill). Claude Code history import is not available.
 
 **You're done.**
 
@@ -198,7 +198,7 @@ For each model call the OMP plugin sends the **provider, model, token counts, co
 **Never sent:** prompts, responses, code, file paths, repository or project names, tool calls or their output, or your working directory. The server checks every request against a fixed list of allowed fields and rejects any request that contains anything else.
 
 - **Pause** at any time with `/munch pause` (OMP) or `munch pause` (the program). Calls made while paused are never uploaded, now or later.
-- **History imports** (`/munch backfill`) are opt-in, show a preview first, and send only daily totals.
+- **History imports** are opt-in and preview locally. The OMP `/munch backfill` sends daily totals; the Codex `munch backfill` sends observed usage metadata, not transcripts or paths.
 - **Delete your account** from Settings to permanently remove everything you've ever sent.
 - **`munch`** sits between your tool and the provider. It reads each request and response in memory only to find the token usage, and sends tokenmunchers metadata-only events: pseudonymous session and event IDs, timestamps, provider, model, token counts, cost and client version. Your provider credentials and your prompts go only to the provider, never to tokenmunchers. `munch pause` stops recording new usage. It listens on your own computer only. See [munch privacy and security](proxy/README.md#privacy--security).
 

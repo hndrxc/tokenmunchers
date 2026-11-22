@@ -33,11 +33,16 @@ function fields(value: Record<string, unknown>, schema: Record<string, Check>): 
 export function validateRequest(value: unknown): string | null {
   if (!object(value)) return "body must be an object";
   const common = { action: oneOf("begin", "chunk", "commit"), device_id: (v: unknown) => typeof v === "string" && UUID.test(v), harness: observation.harness, snapshot_id: (v: unknown) => typeof v === "string" && UUID.test(v) };
-  const schema: Record<string, Check> = value.action === "begin" ? { ...common, cutoff: timestamp, chunk_count: (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= MAX_CHUNKS }
+  const schema: Record<string, Check> = value.action === "begin"
+    ? { ...common, cutoff: timestamp, chunk_count: (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= MAX_CHUNKS, ...(Object.hasOwn(value, "backfill_from") ? { backfill_from: timestamp } : {}) }
     : value.action === "chunk" ? { ...common, index: (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v < MAX_CHUNKS, observations: Array.isArray, ...(Object.hasOwn(value, "superseded_canonical_ids") ? { superseded_canonical_ids: Array.isArray } : {}), ...(Object.hasOwn(value, "identity_aliases") ? { identity_aliases: Array.isArray } : {}) }
     : common;
   const problem = fields(value, schema);
   if (problem) return problem;
+  if (value.action === "begin" && Object.hasOwn(value, "backfill_from")) {
+    if (value.harness !== "codex") return "backfill is codex-only";
+    if (Date.parse(value.backfill_from as string) >= Date.parse(value.cutoff as string)) return "backfill window must precede cutoff";
+  }
   if (value.action !== "chunk") return null;
   const rows = value.observations as unknown[];
   const superseded = (value.superseded_canonical_ids ?? []) as unknown[];

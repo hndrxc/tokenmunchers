@@ -170,6 +170,118 @@ try {
   assert.equal(bot.cost_usd,null,'bot wrapper must preserve unknown cost');
   assert.equal((await db.query("select has_table_privilege('tokenmunchers_discord_reader','public.collector_contributions','select') readable")).rows[0].readable,false);
   await db.exec('reset role;');
+  // ---- Codex backfill mode (issue #4): immutable window, preserved rows, legacy overlap guard ----
+  await db.query('delete from private.rate_limits');
+  const bfDevice = randomUUID();
+  const bfFrom = '2026-01-01T00:00:00.000Z';
+  const bfDevice2 = randomUUID();
+  const bfFrom2 = '2026-02-10T00:00:00.000Z';
+  const bfCutoff2 = '2026-02-12T00:00:00.000Z';
+  const backfillObservation = (id, overrides = {}) => ({ harness:'codex',canonical_id:id,identity_strength:'response',grain:'request',timestamp:'2026-01-01T12:00:00.000Z',interval_start:null,interval_end:null,provider:'unknown',model:'test-model',session_id:'session-bf',parent_session_id:null,is_subagent:false,input_tokens:100,output_tokens:20,cache_read_tokens:0,cache_write_tokens:0,call_count:1,cost_usd:null,cost_basis:'unknown',quality:'observed',...overrides });
+  const totalTokens = async () => Number((await db.query('select coalesce(sum(total_tokens),0)::float8 s from public.collector_contributions where user_id=$1 and not superseded',[uid])).rows[0].s);
+  // Old exact canonical with different metadata/partition stays untouched; new rows insert alongside.
+  await publish([observation('bf-live',{timestamp:cutoff})]);
+  const bfMixedBefore = await totalTokens();
+  const bfMixed = randomUUID();
+  await request('begin',bfMixed,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfMixed,{index:0,observations:[{...backfillObservation('bf-live',{input_tokens:888,output_tokens:888})},{...backfillObservation('bf-new')}]},bfDevice);
+  assert.equal((await request('commit',bfMixed,{},bfDevice)).accepted,1,'only genuinely new rows count');
+  const bfLiveRow = (await db.query('select input_tokens,output_tokens,partition from public.collector_contributions where user_id=$1 and canonical_id=$2',[uid,'bf-live'])).rows[0];
+  assert.equal(Number(bfLiveRow.input_tokens),100); assert.equal(bfLiveRow.partition,'live','pre-existing exact canonical is never updated');
+  const bfNewRow = (await db.query('select partition,total_tokens from public.collector_contributions where user_id=$1 and canonical_id=$2',[uid,'bf-new'])).rows[0];
+  assert.equal(bfNewRow.partition,'history'); assert.equal(Number(bfNewRow.total_tokens),120);
+  assert.equal(await totalTokens(),bfMixedBefore+120,'backfill inserts count exactly once');
+  // Ambiguous reconstructed legacy day skips modern candidates; clean days still insert.
+  await publish([observation('bf-legacy-interval',{identity_strength:'scoped',grain:'reconstructed_interval',quality:'reconstructed',call_count:null,output_tokens:null,interval_start:'2026-02-10T09:00:00.000Z',interval_end:'2026-02-10T18:00:00.000Z',timestamp:'2026-02-10T12:00:00.000Z'})]);
+  const bfOverlapBefore = await totalTokens();
+  const bfOverlap = randomUUID();
+  await request('begin',bfOverlap,{cutoff:bfCutoff2,backfill_from:bfFrom2,chunk_count:1},bfDevice2);
+  await request('chunk',bfOverlap,{index:0,observations:[backfillObservation('bf-overlap',{timestamp:'2026-02-10T15:00:00.000Z'}),backfillObservation('bf-clean',{timestamp:'2026-02-11T15:00:00.000Z'})]},bfDevice2);
+  const bfOverlapResult = await request('commit',bfOverlap,{},bfDevice2);
+  assert.equal(bfOverlapResult.accepted,1,'ambiguous reconstructed day skips modern candidates');
+  assert.equal((await db.query('select count(*)::int n from public.collector_contributions where user_id=$1 and canonical_id in ($2,$3)',[uid,'bf-overlap','bf-clean'])).rows[0].n,1);
+  assert.equal(await totalTokens(),bfOverlapBefore+120);
+  assert.equal((await db.query('select superseded from public.collector_contributions where user_id=$1 and canonical_id=$2',[uid,'bf-legacy-interval'])).rows[0].superseded,false,'legacy interval rows are preserved');
+  await publish([],{superseded_canonical_ids:['bf-legacy-interval']});
+  assert.equal((await db.query('select superseded from public.collector_contributions where user_id=$1 and canonical_id=$2',[uid,'bf-legacy-interval'])).rows[0].superseded,true,'retired interval rows stay superseded');
+  // Interrupted backfill stays invisible; a later exact replay commits and replays its receipt.
+  const bfInterrupted = randomUUID();
+  await request('begin',bfInterrupted,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfInterrupted,{index:0,observations:[backfillObservation('bf-replay-1'),backfillObservation('bf-replay-2')]},bfDevice);
+  assert.equal((await db.query('select count(*)::int n from public.collector_contributions where user_id=$1 and canonical_id like $2',[uid,'bf-replay-%'])).rows[0].n,0,'interrupted backfill has no visibility');
+  const bfReplayBefore = await totalTokens();
+  const bfRerun = randomUUID();
+  await request('begin',bfRerun,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfRerun,{index:0,observations:[backfillObservation('bf-replay-1'),backfillObservation('bf-replay-2')]},bfDevice);
+  const rerun = await request('commit',bfRerun,{},bfDevice);
+  assert.equal(rerun.accepted,2);
+  assert.equal(await totalTokens(),bfReplayBefore+240);
+  const replay = await request('commit',bfRerun,{},bfDevice);
+  assert.equal(replay.accepted,2,'acceptance receipt is preserved on replay');
+  assert.equal((await db.query('select count(*)::int n from public.collector_contributions where user_id=$1 and canonical_id like $2',[uid,'bf-replay-%'])).rows[0].n,2);
+  // Strict window: from inclusive, cutoff exclusive; malformed rows reject the whole commit.
+  const bfBoundaryBefore = await totalTokens();
+  const bfBoundaryOk = randomUUID();
+  await request('begin',bfBoundaryOk,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfBoundaryOk,{index:0,observations:[backfillObservation('bf-at-from',{timestamp:bfFrom})]},bfDevice);
+  assert.equal((await request('commit',bfBoundaryOk,{},bfDevice)).accepted,1,'backfill_from is inclusive');
+  const bfInvalidWindow = randomUUID();
+  await request('begin',bfInvalidWindow,{cutoff,backfill_from:bfFrom,chunk_count:2},bfDevice);
+  await request('chunk',bfInvalidWindow,{index:0,observations:[backfillObservation('bf-at-cutoff',{timestamp:cutoff})]},bfDevice);
+  await request('chunk',bfInvalidWindow,{index:1,observations:[backfillObservation('bf-before-from',{timestamp:'2025-12-31T23:59:59.000Z'})]},bfDevice);
+  assert.equal((await request('commit',bfInvalidWindow,{},bfDevice)).error,'backfill_window_violation','cutoff is exclusive and from is inclusive');
+  assert.equal((await db.query('select count(*)::int n from public.collector_contributions where user_id=$1 and canonical_id in ($2,$3)',[uid,'bf-at-cutoff','bf-before-from'])).rows[0].n,0);
+  assert.equal(await totalTokens(),bfBoundaryBefore+120);
+  const bfShape = randomUUID();
+  await request('begin',bfShape,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfShape,{index:0,observations:[backfillObservation('bf-shaped',{call_count:null})]},bfDevice);
+  assert.equal((await request('commit',bfShape,{},bfDevice)).error,'backfill_window_violation');
+  // Drain abandoned staging so later begins have capacity; stale snapshots are pruned at begin.
+  await db.query('delete from private.rate_limits');
+  await db.query("update private.contribution_snapshots set created_at=now()-interval '8 days' where committed_at is null");
+  const bfDrain = randomUUID();
+  await request('begin',bfDrain,{cutoff,backfill_from:bfFrom,chunk_count:0},bfDevice);
+  assert.equal((await request('commit',bfDrain,{},bfDevice)).accepted,0,'stale staging prunes on begin');
+  const bfCost = randomUUID();
+  await request('begin',bfCost,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfCost,{index:0,observations:[backfillObservation('bf-cost',{cost_usd:0,cost_basis:'reported'})]},bfDevice);
+  assert.equal((await request('commit',bfCost,{},bfDevice)).error,'backfill_window_violation','backfill cost must be unknown');
+  // Backfill snapshots reject corrections: superseded identities and aliases.
+  const bfCorrections = randomUUID();
+  await request('begin',bfCorrections,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfCorrections,{index:0,observations:[backfillObservation('bf-no-corrections')],superseded_canonical_ids:['whatever']},bfDevice);
+  assert.equal((await request('commit',bfCorrections,{},bfDevice)).error,'backfill_rejects_corrections');
+  const bfAlias = randomUUID();
+  await request('begin',bfAlias,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfAlias,{index:0,observations:[backfillObservation('bf-no-alias')],identity_aliases:[{from:'x',to:'bf-no-alias'}]},bfDevice);
+  assert.equal((await request('commit',bfAlias,{},bfDevice)).error,'backfill_rejects_corrections');
+  // Reserved retirement IDs are never resurrected by backfill.
+  await publish([],{superseded_canonical_ids:['bf-retired-canonical']});
+  const bfRetiredBefore = await totalTokens();
+  const bfRetired = randomUUID();
+  await request('begin',bfRetired,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfRetired,{index:0,observations:[backfillObservation('bf-retired-canonical'),backfillObservation('bf-adjacent')]},bfDevice);
+  const bfRetiredResult = await request('commit',bfRetired,{},bfDevice);
+  assert.equal(bfRetiredResult.accepted,1,'retired reservations are never resurrected');
+  assert.equal((await db.query('select count(*)::int n from public.collector_contributions where user_id=$1 and canonical_id=$2',[uid,'bf-retired-canonical'])).rows[0].n,0);
+  assert.equal(await totalTokens(),bfRetiredBefore+120);
+  // Prune rerun: stale backfill staging is pruned like legacy staging; a rerun then succeeds.
+  await db.query("update private.contribution_snapshots set created_at=now()-interval '8 days' where committed_at is null");
+  const bfPrune = randomUUID();
+  await request('begin',bfPrune,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await db.query("update private.contribution_snapshots set created_at=now()-interval '8 days' where committed_at is null");
+  const bfPruneBefore = await totalTokens();
+  const bfAfterPrune = randomUUID();
+  await request('begin',bfAfterPrune,{cutoff,backfill_from:bfFrom,chunk_count:1},bfDevice);
+  await request('chunk',bfAfterPrune,{index:0,observations:[backfillObservation('bf-pruned-rerun')]},bfDevice);
+  assert.equal((await request('commit',bfAfterPrune,{},bfDevice)).accepted,1,'stale backfill staging is pruned and rerun works');
+  assert.equal(await totalTokens(),bfPruneBefore+120);
+  // Source mode + lower/upper bounds are immutable; existing sources cannot be adopted into another mode.
+  assert.equal((await request('begin',randomUUID(),{cutoff,backfill_from:'2025-12-31T00:00:00.000Z',chunk_count:1},bfDevice)).error,'window_conflict');
+  assert.equal((await request('begin',randomUUID(),{cutoff:'2026-01-03T00:00:00.000Z',backfill_from:bfFrom,chunk_count:1},bfDevice)).error,'cutoff_conflict');
+  assert.equal((await request('begin',randomUUID(),{cutoff,chunk_count:1},bfDevice)).error,'mode_conflict','a backfill source is never demoted');
+  assert.equal((await request('begin',randomUUID(),{cutoff,backfill_from:bfFrom,chunk_count:1})).error,'mode_conflict','a legacy source cannot be adopted as backfill');
+  assert.equal((await request('begin',randomUUID(),{cutoff,backfill_from:cutoff,chunk_count:1},bfDevice)).error,'invalid_body','from must strictly precede cutoff');
   // Large staged snapshot: begin + 59 chunks spend one whole shared minute (60 requests x 10 of 600 hits).
   // The commit must receive accurate reset timing, publish nothing while limited, and succeed after
   // waiting exactly Retry-After seconds, resuming from the failed request rather than chunk zero.
@@ -202,5 +314,5 @@ try {
   assert.equal(Number((await totals()).total_tokens),beforeBurst+59*120);
   await db.query('update public.api_keys set revoked_at=now() where key_hash=$1',[hash]);
   assert.equal((await request('commit',first)).error,'invalid_key');
-  console.log('PASS staged atomicity/replay/cleanup/staging limit/cutoff immutability/ownership/null rollups/supersession/aliases/stale snapshots/RLS grants/bot null semantics/rate-limit reset timing/revocation');
+  console.log('PASS staged contributions, Codex backfill retention and overlap, RLS, rate-limit reset, and revocation');
 } finally { await db.close(); }
