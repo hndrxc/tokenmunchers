@@ -102,6 +102,8 @@ func (a *App) Run(args []string) int {
 		err = a.cmdPause(rest, false)
 	case "flush":
 		err = a.cmdFlush(rest)
+	case "backfill":
+		err = a.cmdBackfill(rest)
 	case "env":
 		err = a.cmdEnv(rest)
 	case "exec":
@@ -157,6 +159,7 @@ Commands:
                        omp gets the same variables its shell wrapper leaves out
   stats                Show local captured token totals (today, week, all)
   routes               List configured provider routes (capability redacted; --show-local-urls reveals it)
+  backfill             Preview or upload retained Codex history (--from/--before required to upload)
   version              Print version info
 
 Run "munch <command> -h" for flags on any command.
@@ -227,8 +230,16 @@ func (p *prompter) confirm(question string) (bool, error) {
 		fmt.Fprintf(p.out, "%s [Y/n] y\n", question)
 		return true, nil
 	}
+	return p.askConfirmation(question, true)
+}
+
+func (p *prompter) askConfirmation(question string, defaultYes bool) (bool, error) {
+	suffix := "[y/N]"
+	if defaultYes {
+		suffix = "[Y/n]"
+	}
 	for {
-		fmt.Fprintf(p.out, "%s [Y/n] ", question)
+		fmt.Fprintf(p.out, "%s %s ", question, suffix)
 		line, err := p.in.ReadString('\n')
 		eof := errors.Is(err, io.EOF)
 		if err != nil && !eof {
@@ -238,13 +249,15 @@ func (p *prompter) confirm(question string) (bool, error) {
 			fmt.Fprintln(p.out) // input ended mid-line; finish the prompt line
 		}
 		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "", "y", "yes":
+		case "y", "yes":
 			return true, nil
 		case "n", "no":
 			return false, nil
+		case "":
+			return defaultYes, nil
 		}
 		if eof {
-			return true, nil
+			return defaultYes, nil
 		}
 		fmt.Fprintln(p.out, "Please answer y or n.")
 	}

@@ -187,6 +187,30 @@ Then restart Codex (start a new `codex` process) and make a request. `requires_o
 - **What is and isn't routed:** this sends Codex's model responses through `munch` with your existing ChatGPT sign-in; other first-party ChatGPT functionality is not claimed to be routed, and the default backend is still used for account discovery. Sign-in itself still happens directly with OpenAI, and the proxy serves HTTP/SSE only — it rejects WebSocket upgrades (HTTP 426). Only calls that actually go through the proxy are recorded.
 - **Using an API key instead?** Codex then talks to the `openai` route: set `openai_base_url` in `~/.codex/config.toml` to the same URL `munch env` exports as `OPENAI_BASE_URL` for other OpenAI-compatible clients.
 
+### Codex history backfill
+
+`munch backfill` previews usage locally. It reads retained Codex `sessions/` and `archived_sessions/` rollouts (`.jsonl` and `.jsonl.zst`), plus Munch's own config and desktop collector ledger (overridable with `--config-dir` and `--state-dir`), not the proxy log. It uses `$CODEX_HOME` or `~/.codex` unless you pass `--codex-home`. Run it separately for each independently verified source.
+
+Before uploading, establish a UTC interval in which **none** of that source's selected history could have gone through Munch, including archives copied into it. Use independent evidence such as dated routing or deployment records covering both ChatGPT sign-in and API-key routes. A first retained proxy event or a file modification time does not establish this. If the evidence is incomplete, narrow the interval or don't upload. `--from` is inclusive and `--before` is exclusive; neither can be in the future.
+
+```bash
+munch backfill  # local diagnostic preview; no window means no eligible records
+
+# Example dates only: substitute the verified boundaries for your Codex home.
+munch backfill --from 2026-10-18T00:00:00Z --before 2026-11-17T00:00:00Z
+munch backfill --from 2026-10-18T00:00:00Z --before 2026-11-17T00:00:00Z --upload
+```
+
+`--upload` prints the same preview before asking for an explicit `yes` (default no; no `--yes` option). The daemon need not be running. Upload uses your Munch API key and the configured server's `/functions/v1/contributions` endpoint. It sends response and session identifiers, recorded UTC timestamps, contextual model/provider and agent attribution when known, and disjoint token counts. It never sends transcripts, prompts, responses, or file paths. Cost is unknown.
+
+Only observed per-response usage qualifies. Cumulative counters, embedded checkpoints and usage on or after the cutoff are not imported. If an observed record shows that the managed `munch_chatgpt` provider was used before `--before`, the whole window is withheld. Preview never contacts the server, so it cannot account for previously accepted identities or ambiguous overlap with the retired collector. The server preserves those rows and reports how many records the snapshot accepted.
+
+Usage timestamped at or after the current Codex desktop activation, or whose response ID is already in the desktop ledger even if collection is off, is excluded as `desktop_collected` because the collector reports it. This safeguard applies regardless of which Codex home is scanned. A missing desktop ledger is treated as empty, and an incomplete last line is ignored, as the collector itself does. An unreadable or malformed ledger stops both preview and upload rather than risking overlap. If backfill and the collector still report the same response, for example from another machine, TokenMunchers keeps one copy.
+
+The first confirmed upload fixes the window for that Codex home in Munch's state directory. If interrupted, rerun with the same window; unchanged records replay the same snapshot. Staged chunks are not visible before commit, and pruning rollouts never deletes usage already accepted. This does not recover post-cutover gaps or import Claude Code history.
+
+The server needs the [Codex backfill migration and updated contributions function](../supabase/README.md#deploying). [Format and overlap research](../docs/claude-codex-backfill.md#8-munch-issue-4-observed-codex-import).
+
 ---
 
 ## Desktop accounting pilot
@@ -228,7 +252,7 @@ On Windows, `munch install` offers Codex desktop app collection when it detects 
 
 ### What is counted and sent
 
-- One call per exact provider ID: a Claude request ID or a Codex response ID. Usage is live-only from opt-in activation; Munch does not backfill earlier history or infer calls from Codex `token_count` snapshots. If a safe model name is unavailable, it is reported as `unknown`.
+- One call per exact provider ID: a Claude request ID or a Codex response ID. The desktop collector counts usage from opt-in activation and does not infer calls from Codex `token_count` snapshots. The separate [`munch backfill`](#codex-history-backfill) command can import eligible earlier Codex usage. If a safe model name is unavailable, it is reported as `unknown`.
 - Counts use the actual reported tokens. Claude reports ordinary input separately from cache reads and writes. Codex input includes cached input; Munch subtracts cached reads and writes from ordinary input so the cache tokens aren't counted twice. Reasoning tokens are not added on top of output. Cost is unknown, not a price estimate or subscription charge.
 - Munch sends only accounting metadata, including the actual provider request or response ID, through the TokenMunchers `/contributions` endpoint using your TokenMunchers key. It does not upload raw telemetry or rollout records, prompts, replies, tool content, session IDs, or provider credentials. Once committed, eligible calls appear in the dashboard’s **Activity** as **Claude Code** or **Codex** on the next poll (roughly every 30 seconds). Activity reads the existing contribution ledger; it does not create proxy usage events, a second ledger, or **Live now** presence.
 - Desktop collection state and pending contributions are stored separately under `<state>/desktop/`. Pending contributions are durable across daemon restarts and retried if delivery fails. `munch pause` stops new accounting without affecting the apps; contributions already queued can still be delivered. `munch resume` resumes accounting. Only one daemon can own a desktop state directory at a time; a second daemon reports the local lock conflict. Separately, if TokenMunchers reports that an ID in a batch belongs to another account, Munch reports the delivery error and retains the original batch rather than taking ownership or dropping it.
@@ -269,6 +293,7 @@ On Windows, the default install directory is `%LOCALAPPDATA%\Programs\Munch`, th
 | `<config>/prices.json` | Only if you create it ([pricing](#custom-model-pricing-pricesjson)) |
 | `<state>/queue.jsonl` (`0600`) | Events awaiting delivery; renamed to `queue.jsonl.<pid>.<n>.flushing` while sending, deleted once delivered |
 | `<state>/usage.jsonl` (`0600`) | One metadata line per recorded call, for `munch stats`; never trimmed or deleted by Munch |
+| `<state>/backfill-source-*.json` (`0600`) | Random upload source UUID and fixed window per Codex home; created only after upload confirmation. No records, API key, or source path. |
 | `<state>/tmproxy.log`, `<state>/tmproxy.pid` | Daemon output under launchd and the fallback (systemd uses `journalctl --user -u tmproxy`); PID file for the fallback only, removed on stop |
 | `<state>/desktop/` | State and durable pending contributions for the [desktop accounting pilot](#desktop-accounting-pilot), separate from the proxy queue |
 | Claude `settings.json` (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) | Desktop telemetry env vars under `env`, written atomically with 2-space indented JSON (mode `0600` when created) by `munch install` and `munch desktop claude on`; only Munch's exact telemetry keys are ever updated or removed ([Desktop accounting pilot](#desktop-accounting-pilot)) |
@@ -357,8 +382,8 @@ Uninstall intentionally leaves the executable and your user `Path` unchanged. To
 ### No double counting and secrets
 
 - **OMP:** with omp-tm, the `omp` wrapper and `munch exec -- omp` hide every proxy variable so only the plugin reports it; without omp-tm, disable the plugin. See [Oh My Pi (omp-tm)](#oh-my-pi-omp-tm).
-- **Codex proxy accounting:** ChatGPT sign-in ignores the proxy environment variables, so only the selected Munch provider routes it. [Uninstall the retired plugins](#retired-claude-code-and-codex-plugins), which would report the same calls. Do not use proxy accounting and the desktop pilot for the same app usage.
-- **API key:** stored in `config.json`, copied to omp-tm only if you choose it, sent to TokenMunchers for proxy ingest or desktop contributions, and never printed (`login` and `status` say only whether one is configured).
+- **Codex proxy accounting:** ChatGPT sign-in ignores the proxy environment variables, so only the selected Munch provider routes it. [Uninstall the retired plugins](#retired-claude-code-and-codex-plugins), which would report the same calls. Do not use proxy accounting and the desktop pilot for the same app usage. Backfill is limited to independently verified pre-proxy usage.
+- **API key:** stored in `config.json`, copied to omp-tm only if you choose it, sent to TokenMunchers for proxy ingest, desktop contributions, or confirmed backfill uploads, and never printed (`login` and `status` say only whether one is configured).
 - **Private proxy URLs** from `local-auth.key` appear in `munch env` output, `munch routes --show-local-urls`, shell and `exec` environments, and Codex's `config.toml`. The Claude desktop telemetry endpoint is a separate private capability. Provider credentials pass through to the upstream only. See [Privacy & Security](#privacy--security).
 
 ---
