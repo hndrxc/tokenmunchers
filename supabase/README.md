@@ -251,7 +251,7 @@ supabase db push
 supabase functions deploy ingest history contributions
 ```
 
-Deploy server changes **before** publishing a plugin or Munch version that depends on them. Codex backfill requires [`20261122040000_codex_backfill.sql`](migrations/20261122040000_codex_backfill.sql) and the updated `contributions` Edge Function. Both were deployed to production on 2026-11-22; apply and deploy them for your own instance as well.
+Deploy server changes **before** publishing a plugin or Munch version that depends on them. Codex backfill requires [`20261122040000_codex_backfill.sql`](migrations/20261122040000_codex_backfill.sql) and Claude Code backfill requires [`20261122050000_claude_backfill.sql`](migrations/20261122050000_claude_backfill.sql), each with the matching `contributions` Edge Function. Both were deployed to production on 2026-11-22; apply and deploy them for your own instance as well.
 
 Apply the database migrations **before** deploying a dashboard that uses `recent_activity` and spend coverage.
 

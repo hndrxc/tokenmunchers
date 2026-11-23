@@ -2,7 +2,7 @@
 
 *Note: the native Claude Code and Codex plugins and the collector (`integrations/`) were removed. Those tools are now reported through `munch`. Paths to `integrations/` below refer to removed code.*
 
-**Status:** Observed Codex backfill shipped in Munch 0.1.7 and its server update is deployed. [Section 8](#8-munch-issue-4-observed-codex-import) describes that import. [Section 10](#10-claude-code-cli-and-desktop-backfill) describes Claude Code CLI and local Desktop Code backfill and verification; Claude upload requires the corresponding server update.
+**Status:** Observed Codex backfill shipped in Munch 0.1.7. [Section 8](#8-munch-issue-4-observed-codex-import) describes that import. [Section 10](#10-claude-code-cli-and-desktop-backfill) describes Claude Code CLI and local Desktop Code backfill and verification. The server updates for both are deployed to production.
 
 **Date:** 2026-10-27 | **Scope:** Design review for Claude Code and OpenAI Codex CLI in `tokenmunchers`  
 **Sources:** Upstream repositories and packages at pinned commits. No application code changes.  
