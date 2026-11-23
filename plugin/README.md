@@ -88,6 +88,8 @@ Only the transcript's *file name* goes into the hash, never its directory, becau
 
 ### Usage from other tools
 
+**New to external wrapper agents?** See the [end-to-end setup guide](../docs/external-agent-setup.md) for a generic integration overview, an AGY wrapper example, builder/scout agent templates, offline tests, and troubleshooting. The example is optional; the JSONL event contract below is CLI-agnostic.
+
 Some agents call models outside OMP, for example a wrapper script that runs another vendor's CLI from an OMP agent. `message_end` never sees those calls. Such a tool can report them by appending one JSON line per finished call to `external-usage.jsonl` in the plugin's folder:
 
 ```json
