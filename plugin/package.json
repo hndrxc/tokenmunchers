@@ -1,6 +1,6 @@
 {
   "name": "omp-tokenmunchers",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Reports Oh My Pi token usage (metadata only) to your friend group's tokenmunchers leaderboard",
   "type": "module",
   "main": "index.ts",

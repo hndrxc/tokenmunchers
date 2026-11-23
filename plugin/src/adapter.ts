@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
-export const CLIENT_VERSION = "0.2.0";
+export const CLIENT_VERSION = "0.3.0";
 
 export interface UsageEvent {
 	kind: "usage";
