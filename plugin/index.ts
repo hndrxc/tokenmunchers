@@ -14,6 +14,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@o
 
 import { presence, sessionEnd, sessionKeyFromFile, toUsageEvent } from "./src/adapter.ts";
 import { KEY_PATTERN, loadConfig, loadFile, saveConfig } from "./src/config.ts";
+import { drainExternalUsage, externalPending } from "./src/external.ts";
 import { PauseLog } from "./src/pauses.ts";
 import { statePath } from "./src/state.ts";
 import { Syncer } from "./src/syncer.ts";
@@ -85,6 +86,17 @@ export default function tokenmunchers(pi: ExtensionAPI) {
 		await syncer.gapFillTick();
 	};
 
+	// Moves calls that other tools logged to external-usage.jsonl into the
+	// delivery queue. While paused, they wait in the file.
+	const drainExternal = () => {
+		if (paused) return;
+		try {
+			drainExternalUsage({ dataDir, pauses, deliver: (events) => reporter.enqueue(events) });
+		} catch {
+			// Disk trouble must never break the agent.
+		}
+	};
+
 	const isSubagent = (ctx: ExtensionContext) => ctx.agent?.kind === "sub";
 
 	const sessionIdOf = (ctx: ExtensionContext): string => {
@@ -132,8 +144,10 @@ export default function tokenmunchers(pi: ExtensionAPI) {
 		if (!paused) reporter.report(presence("session_start", sessionId, ctx.model, startedAt));
 		if (!flushTimer) {
 			flushTimer = ctx.setInterval(() => {
+				drainExternal();
 				void reporter.flush().then(backgroundSync).catch(() => {});
 			}, FLUSH_MS);
+			drainExternal();
 			void reporter.flush(true).then(backgroundSync).catch(() => {});
 		}
 		setStatus(ctx);
@@ -246,6 +260,7 @@ export default function tokenmunchers(pi: ExtensionAPI) {
 			`key: ${key}`,
 			`state: ${paused ? "paused" : "reporting"}`,
 			`queued events: ${reporter.queueSize()}`,
+			`external usage waiting: ${externalPending(dataDir)}`,
 			`last error: ${reporter.lastError ?? syncer.lastError ?? "none"}`,
 			`live since: ${liveSince ? new Date(liveSince).toISOString() : seeded ? "no calls reported yet" : "unknown (waiting for server)"}`,
 			`gap fill: stats.db row ${statsCursor}${gap ? `, last pass resent ${gap.sent} of ${gap.scanned}` : ""}`,

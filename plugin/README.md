@@ -28,7 +28,7 @@ Everything is under one command, `/munch`, with tab completion:
 
 | Command | Description |
 | --- | --- |
-| `/munch`, `/munch status` | Key prefix, reporting state, queued events, last error, "live since" time and gap-fill progress |
+| `/munch`, `/munch status` | Key prefix, reporting state, queued events, external usage waiting, last error, "live since" time and gap-fill progress |
 | `/munch login [key]` | Saves the API key (asks for it if omitted) and checks it against the server |
 | `/munch pause` | Stops reporting for this OMP process |
 | `/munch resume` | Resumes after a pause |
@@ -86,6 +86,30 @@ Only the transcript's *file name* goes into the hash, never its directory, becau
 
 `/munch pause` records the paused time range for each session in `pauses.json`. This file never leaves the machine. Gap fill and backfill skip every call inside a paused range, including calls from subagents of a paused session.
 
+### Usage from other tools
+
+Some agents call models outside OMP, for example a wrapper script that runs another vendor's CLI from an OMP agent. `message_end` never sees those calls. Such a tool can report them by appending one JSON line per finished call to `external-usage.jsonl` in the plugin's folder:
+
+```json
+{"v":1,"source":"agy","id":"6322b946-3d6e-4a56-89e4-ea1206abacbf","ts":1795395592000,"provider":"google-antigravity","model":"gemini-4-hydrogen-high","input_tokens":10261,"output_tokens":74,"cache_read_tokens":2048,"session_id":"…","session_file":"…"}
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `v` | yes | Format version, `1` |
+| `source` | yes | Short lowercase name of the tool (letters, digits, `-`, `_`; up to 32 characters) |
+| `id` | yes | The call's unique id from that tool, up to 128 characters. It keys the event id, so a call written twice is stored once. |
+| `ts` | yes | When the call finished: ms since the epoch, or an ISO 8601 string |
+| `provider`, `model` | yes | Sent as-is, so use the names the dashboard already shows for that provider |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | no | Integers; missing ones count as 0. Lines with no tokens are dropped. |
+| `cost_usd` | no | Defaults to 0 |
+| `session_id` | no | OMP's `PI_SESSION_ID` from the tool's environment. Without it, the session id is `external-<source>`. |
+| `session_file` | no | OMP's `PI_SESSION_FILE`. Used only on this machine, to apply `/munch pause` windows and set `is_subagent`, the same way as for OMP's own calls. It is never uploaded. |
+
+Every minute (and when a session starts), a non-paused OMP process moves the file aside, turns each valid line into a normal usage event, and adds it to `queue.jsonl`, so delivery, retries and the ~7-day limit work exactly as for live calls. Invalid, unreadable or too-old lines are dropped. The event id is a UUIDv5 of `external|<source>|<id>`. `/munch status` shows how many lines are waiting.
+
+Writers should append whole lines and never rewrite the file. A drain that crashes leaves an `external-usage.*.draining` file, which the next drain picks up after 5 minutes.
+
 ## Gap fill and backfill
 
 OMP indexes every session into a local SQLite database, `stats.db`. `omp stats` and `/usage` keep it up to date. The plugin opens it **read-only** and reads only these columns: `id`, `session_file`, `folder`, `timestamp`, `duration`, `provider`, `model`, the four token counts, `cost_total` and `agent_type`. `folder` is used only for the backfill preview and `--exclude`, and is never uploaded. Error messages, prompts and tool data are never read.
@@ -121,6 +145,7 @@ All in `<agent dir>/tokenmunchers/` (usually `~/.omp/agent/tokenmunchers/`). Non
 | `state.json` | Device id, "live since" time, gap-fill progress |
 | `pauses.json` | Paused time ranges per session |
 | `queue.jsonl` | Usage events waiting to be retried |
+| `external-usage.jsonl` | Calls logged by other tools, waiting to be queued (see [Usage from other tools](#usage-from-other-tools)) |
 | `gapfill.lock` | Lets only one OMP process gap-fill at a time |
 
 ## Development
