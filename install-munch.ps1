@@ -1,10 +1,11 @@
 # Install the latest stable Munch CLI for the current Windows user.
 # One-liner (paste into a PowerShell window):
-#   irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1 | iex
+#   irm https://tokenmunchers.taiisshort.com/install.ps1 | iex
 # Or download the script and run it directly:
+#   Invoke-WebRequest -Uri 'https://tokenmunchers.taiisshort.com/install.ps1' -OutFile '.\install-munch.ps1'
 #   & .\install-munch.ps1
 # -DownloadOnly installs the binary and updates PATH without running setup:
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1))) -DownloadOnly
+#   & ([scriptblock]::Create((irm https://tokenmunchers.taiisshort.com/install.ps1))) -DownloadOnly
 param([switch]$DownloadOnly)
 
 # Run everything in a child scope so helper functions, preference variables, and

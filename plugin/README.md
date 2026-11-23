@@ -18,7 +18,7 @@ Create an API key on the dashboard's Settings page, then run this inside OMP:
 
 `munch install` (see the [munch program](../proxy/README.md)) can do this for you: it installs this plugin and gives it your API key (omp-tm).
 
-`/munch` here is the command inside OMP. `munch` in a terminal is the separate local proxy program.
+`/munch` is the OMP plugin command. The terminal command [`munch backfill`](../proxy/README.md#codex-history-backfill) imports observed Codex history, not OMP history. For OMP history, use `/munch backfill` inside OMP.
 
 If OMP is routed through the munch proxy and this plugin is enabled, each call is counted twice. `munch install` prevents this by running `omp` without the proxy variables.
 

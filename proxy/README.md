@@ -22,7 +22,7 @@ For first-party desktop subscription usage without routing inference through Mun
 Open PowerShell 5.1 or newer on Windows 10 or 11 (`amd64` or `arm64`). No Go or administrator account is needed. Create a `tm_` key on the [dashboard](https://tokenmunchers.taiisshort.com/settings) under **Settings → API keys**, then run:
 
 ```powershell
-irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1 | iex
+irm https://tokenmunchers.taiisshort.com/install.ps1 | iex
 ```
 
 Paste the key when Munch asks; your input is visible. Answer the questions it asks about desktop apps (Claude Desktop, the Codex desktop app), Codex CLI, and OMP when it detects them. Then run `munch status` and look for your first routed request in the dashboard's **Activity** feed. For what the installer does, reviewing it before running it, and upgrading, see [Install details](#install-details).
@@ -33,8 +33,7 @@ You need Linux or macOS on `amd64` or `arm64`, and a `tm_` API key from the dash
 
 ```bash
 # 1. Install the latest release as ~/.local/bin/munch (checked against SHA256SUMS)
-curl -fsSL https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.sh -o install-munch.sh &&
-  sh install-munch.sh
+curl -fsSL https://tokenmunchers.taiisshort.com/install.sh | sh
 
 # 2. Only if `munch` is not found: put ~/.local/bin on PATH for this shell
 export PATH="$HOME/.local/bin:$PATH"
@@ -49,24 +48,32 @@ Paste the key when asked; your input is visible. `munch install` starts the back
 
 ## Install details
 
+The short installer URLs serve `install-munch.sh` and `install-munch.ps1` from the repository's `main` branch. The scripts download the latest stable release, not a build from `main`.
+
 ### What the Windows installer does
 
 `install-munch.ps1` downloads the matching native Windows executable from the newest stable release, checks the ZIP against `SHA256SUMS`, installs `munch.exe` to `%LOCALAPPDATA%\Programs\Munch`, adds that directory to your user `PATH`, and runs `munch install`. Munch then runs as a detached process in your login session: it does not set up an automatic startup task or service, edit PowerShell profiles, or change execution policy. It stops at Windows sign-out, so run `munch start` after signing in if it isn't running.
 
 ### Review the installer before running it
 
-Prefer to review the script before running it? Download it first:
+On Linux and macOS, download the script, review it, then run it:
+
+```bash
+curl -fsSL https://tokenmunchers.taiisshort.com/install.sh -o install-munch.sh
+# Review install-munch.sh before running it.
+sh install-munch.sh
+```
+
+On Windows, download the PowerShell script:
 
 ```powershell
-Invoke-WebRequest -UseBasicParsing `
-  -Uri 'https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1' `
-  -OutFile '.\install-munch.ps1'
+Invoke-WebRequest -Uri 'https://tokenmunchers.taiisshort.com/install.ps1' -OutFile '.\install-munch.ps1'
 ```
 
 Run `.\install-munch.ps1` after review. If `RemoteSigned` blocks the download, unblock just the reviewed file with `Unblock-File -LiteralPath '.\install-munch.ps1'`. If policy still blocks it, use the [manual ZIP install](#manual-windows-install) instead; never change machine execution policy. To install the executable and update `PATH` without running CLI setup, use `-DownloadOnly`:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1))) -DownloadOnly
+& ([scriptblock]::Create((irm https://tokenmunchers.taiisshort.com/install.ps1))) -DownloadOnly
 ```
 
 Then run `munch install` when ready. If `munch` isn't found afterward, open a new terminal (or run `& "$env:LOCALAPPDATA\Programs\Munch\munch.exe"` with the desired arguments).
@@ -184,7 +191,7 @@ requires_openai_auth = true
 Then restart Codex (start a new `codex` process) and make a request. `requires_openai_auth = true` reuses your existing ChatGPT sign-in. The proxy forwards everything after the route name verbatim, so `…/chatgpt/backend-api/codex/…` reaches `https://chatgpt.com/backend-api/codex/…`. This was tested with Codex 0.171.0. A later `munch install` recognizes exactly this provider: it only updates its `base_url` if the private URL changed, and `munch uninstall` never removes it.
 
 - **Keep the URL private:** it contains the capability secret. Don't put it in shared config, tickets, screenshots, or logs.
-- **What is and isn't routed:** this sends Codex's model responses through `munch` with your existing ChatGPT sign-in; other first-party ChatGPT functionality is not claimed to be routed, and the default backend is still used for account discovery. Sign-in itself still happens directly with OpenAI, and the proxy serves HTTP/SSE only — it rejects WebSocket upgrades (HTTP 426). Only calls that actually go through the proxy are recorded.
+- **What is and isn't routed:** this sends Codex's model responses through `munch` with your existing ChatGPT sign-in. Account discovery still uses the default backend, and sign-in goes directly to OpenAI. The proxy rejects WebSocket upgrades (HTTP 426) and records only calls routed through it. Desktop collection and history backfill are separate.
 - **Using an API key instead?** Codex then talks to the `openai` route: set `openai_base_url` in `~/.codex/config.toml` to the same URL `munch env` exports as `OPENAI_BASE_URL` for other OpenAI-compatible clients.
 
 ### Codex history backfill
@@ -209,13 +216,13 @@ Usage timestamped at or after the current Codex desktop activation, or whose res
 
 The first confirmed upload fixes the window for that Codex home in Munch's state directory. If interrupted, rerun with the same window; unchanged records replay the same snapshot. Staged chunks are not visible before commit, and pruning rollouts never deletes usage already accepted. This does not recover post-cutover gaps or import Claude Code history.
 
-The server needs the [Codex backfill migration and updated contributions function](../supabase/README.md#deploying). [Format and overlap research](../docs/claude-codex-backfill.md#8-munch-issue-4-observed-codex-import).
+Backfilled usage counts toward leaderboard totals but does not appear in the dashboard's **Activity** feed. The Codex backfill migration and updated `contributions` function are deployed on hosted TokenMunchers. For self-hosting, see the [deployment steps](../supabase/README.md#deploying). [Format and overlap research](../docs/claude-codex-backfill.md#8-munch-issue-4-observed-codex-import).
 
 ---
 
 ## Desktop accounting pilot
 
-The pilot is off by default. It observes eligible local desktop usage without changing provider sign-in, subscription billing, or model routing. It does not cover cloud sessions, Cowork, or ordinary Claude or ChatGPT chat, and this pilot does not claim macOS runtime support.
+The pilot is off by default. It counts eligible local desktop usage from opt-in onward without changing provider sign-in, subscription billing, or model routing. To import eligible earlier Codex usage, use the separate [history backfill](#codex-history-backfill) command. The pilot does not cover cloud sessions, Cowork, or ordinary Claude or ChatGPT chat, and does not claim macOS runtime support.
 
 ### Build, opt in, and check status
 
@@ -252,9 +259,9 @@ On Windows, `munch install` offers Codex desktop app collection when it detects 
 
 ### What is counted and sent
 
-- One call per exact provider ID: a Claude request ID or a Codex response ID. The desktop collector counts usage from opt-in activation and does not infer calls from Codex `token_count` snapshots. The separate [`munch backfill`](#codex-history-backfill) command can import eligible earlier Codex usage. If a safe model name is unavailable, it is reported as `unknown`.
+- One call per exact provider ID: a Claude request ID or a Codex response ID. The desktop collector does not infer calls from Codex `token_count` snapshots. If a safe model name is unavailable, it is reported as `unknown`.
 - Counts use the actual reported tokens. Claude reports ordinary input separately from cache reads and writes. Codex input includes cached input; Munch subtracts cached reads and writes from ordinary input so the cache tokens aren't counted twice. Reasoning tokens are not added on top of output. Cost is unknown, not a price estimate or subscription charge.
-- Munch sends only accounting metadata, including the actual provider request or response ID, through the TokenMunchers `/contributions` endpoint using your TokenMunchers key. It does not upload raw telemetry or rollout records, prompts, replies, tool content, session IDs, or provider credentials. Once committed, eligible calls appear in the dashboard’s **Activity** as **Claude Code** or **Codex** on the next poll (roughly every 30 seconds). Activity reads the existing contribution ledger; it does not create proxy usage events, a second ledger, or **Live now** presence.
+- The desktop collector sends only accounting metadata, including the provider request or response ID, to `/functions/v1/contributions` using your TokenMunchers key. It does not upload raw telemetry or rollout records, prompts, replies, tool content, session IDs, or provider credentials. Once committed, eligible desktop calls appear in **Activity** as **Claude Code** or **Codex** on the next poll (roughly every 30 seconds). They do not create proxy usage events or **Live now** presence.
 - Desktop collection state and pending contributions are stored separately under `<state>/desktop/`. Pending contributions are durable across daemon restarts and retried if delivery fails. `munch pause` stops new accounting without affecting the apps; contributions already queued can still be delivered. `munch resume` resumes accounting. Only one daemon can own a desktop state directory at a time; a second daemon reports the local lock conflict. Separately, if TokenMunchers reports that an ID in a batch belongs to another account, Munch reports the delivery error and retains the original batch rather than taking ownership or dropping it.
 
 ### Change the key or destination
@@ -302,7 +309,7 @@ On Windows, the default install directory is `%LOCALAPPDATA%\Programs\Munch`, th
 
 `install-munch.sh` writes only `munch` (mode `755`) to `${MUNCH_INSTALL_DIR:-$HOME/.local/bin}`. It takes the newest published stable `munch-vX.Y.Z` release, verifies the archive against `SHA256SUMS` in a temporary directory under `$TMPDIR` (default `/tmp`), and moves the binary into place with one rename; temporary files are removed on exit. It does not touch `PATH`, profiles, config, or services, and does not run `munch`.
 
-`install-munch.ps1` is the Windows installer; run it from PowerShell with `irm https://raw.githubusercontent.com/hndrxc/tokenmunchers/main/install-munch.ps1 | iex` (or download and review it first — see [Install details](#install-details)). It installs the matching native Windows executable from the newest stable release after checking the ZIP against `SHA256SUMS`, adds its directory to the user `PATH`, and runs `munch install` unless `-DownloadOnly` was specified.
+`install-munch.ps1` installs the matching Windows executable after checking the ZIP against `SHA256SUMS`, adds the install directory to your user `PATH`, and runs `munch install` unless you pass `-DownloadOnly`. See the [PowerShell command](#windows-powershell) and the [review-first instructions](#review-the-installer-before-running-it).
 
 `munch login` saves `api_key` after a format check (no network call), plus `ingest_url` with `--url` and `listen_addr` with `--listen`. A running daemon keeps its old settings until `munch restart`.
 
@@ -392,7 +399,7 @@ Uninstall intentionally leaves the executable and your user `Path` unchanged. To
 
 ### Install a release
 
-The [Linux and macOS installer](#linux-and-macos) runs on `amd64` and `arm64`. It needs `curl`, `python3`, `tar`, `mktemp`, `awk`, and either `sha256sum` or `shasum`, but not Go or `sudo`. To install somewhere else, run `MUNCH_INSTALL_DIR=/path/to/bin sh install-munch.sh`, then put that directory on your `PATH` and run `munch --version` and `munch install`. For the native Windows installer, see [Windows PowerShell](#windows-powershell).
+The [Linux and macOS installer](#linux-and-macos) runs on `amd64` and `arm64`. It needs `curl`, `python3`, `tar`, `mktemp`, `awk`, and either `sha256sum` or `shasum`, but not Go or `sudo`. To install elsewhere, [download the script](#review-the-installer-before-running-it) and run `MUNCH_INSTALL_DIR=/path/to/bin sh install-munch.sh`, then put that directory on your `PATH` and run `munch --version` and `munch install`. For the native Windows installer, see [Windows PowerShell](#windows-powershell).
 
 For a manual Unix install, download the archive for your OS (`linux` or `darwin`) and architecture (`amd64` or `arm64`) and `SHA256SUMS` from [GitHub Releases](https://github.com/hndrxc/tokenmunchers/releases). Check the archive against the matching entry before extracting `munch` into a directory on your `PATH`.
 
@@ -418,7 +425,9 @@ Add the path shown by `$dir` to your user `Path` if you want to run `munch` by n
 
 ### Update an installed release
 
-On Windows, run `munch stop` to release the running executable before replacing it. Download, review, and rerun the [PowerShell installer](#windows-powershell); it reuses your saved key and starts the daemon again. If you use `-DownloadOnly`, run `munch start` yourself afterward. The commands below are for Linux and macOS.
+`munch update` does not run on native Windows. Run `munch stop` before replacing the executable, then rerun the [PowerShell installer](#windows-powershell). It reuses your saved key and starts the daemon. If you use [`-DownloadOnly`](#review-the-installer-before-running-it), run `munch start` yourself afterward.
+
+On Linux and macOS:
 
 ```bash
 munch update    # verify and install the newest stable release in place
@@ -429,7 +438,7 @@ What `update` checks and leaves alone is described in [`munch update`](#munch-up
 
 ### Build from source
 
-Requires Go 1.24+.
+Requires Go 1.24 or newer. The Go module uses `github.com/klauspost/compress` for compressed Codex rollouts and `github.com/pelletier/go-toml/v2` for TOML.
 
 ```bash
 cd proxy
@@ -448,20 +457,20 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o munch.exe ./cmd/munch
 Untagged source builds report version `dev` and cannot use `munch update`. To set a version in a manual build from `proxy/`:
 
 ```bash
-go build -ldflags '-X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=0.1.3' ./cmd/munch
+go build -ldflags '-X github.com/tokenmunchers/tokenmunchers/proxy/internal/config.Version=0.1.7' ./cmd/munch
 ```
 
 ### Cut a release
 
-From the repository root on `main`, run the release helper with the next version:
+From the repository root on `main`, run the release helper with the next version. On Windows, run it with Git Bash; `.gitattributes` keeps the helper and `*.sh` scripts in LF format.
 
 ```bash
-bash .github/scripts/release-munch 0.1.3
+bash .github/scripts/release-munch MAJOR.MINOR.PATCH
 ```
 
-The helper pushes the release commit to `origin/main` first, then creates and pushes the annotated `munch-v0.1.3` tag in a separate push. Don't send `main` and the tag in one push: GitHub recorded only the branch run when we did that for `v0.1.0`.
+The helper pushes the release commit to `origin/main`, then creates and pushes the annotated `munch-vMAJOR.MINOR.PATCH` tag separately. Don't push `main` and the tag together: GitHub recorded only the branch run when we did that for `v0.1.0`.
 
-The tag push starts the `munch` workflow. It tests `proxy/` and publishes four Unix `.tar.gz` archives (Linux and macOS, each on `amd64` and `arm64`), two Windows `.zip` archives (`amd64` and `arm64`, each containing only `munch.exe`), and one `SHA256SUMS` covering all six archives. If the tag is on GitHub but no tag run appears in Actions, start the same workflow with `gh workflow run munch.yml --ref munch-v0.1.3`. If only the tag push failed, retry it with `git push --no-follow-tags origin refs/tags/munch-v0.1.3`.
+The tag push starts the `munch` workflow. It tests `proxy/` and publishes six archives: Linux and macOS `.tar.gz` files and Windows `.zip` files, each for `amd64` and `arm64`, plus one `SHA256SUMS` covering all six. If the tag is on GitHub but no run appears in Actions, use `gh workflow run munch.yml --ref munch-vMAJOR.MINOR.PATCH` with the actual tag. If only the tag push failed, verify the local tag and retry with `git push --no-follow-tags origin refs/tags/munch-vMAJOR.MINOR.PATCH`.
 
 `munch --version` and the usage client's version both use the numeric version from the tag.
 
@@ -516,27 +525,29 @@ Because the wrapper removes these variables, configure custom OMP endpoints (for
 
 ## Commands
 
-Every command except `update` and `--version` accepts `--config-dir` and `--state-dir`; all except `stats` also accept `--listen`.
+All commands except `update`, help, and version accept `--config-dir` and `--state-dir`. Of the commands that accept those flags, all except `stats` and `backfill` also accept `--listen`; for `desktop` it overrides the address used by `claude-env`. Run `munch <command> -h` to inspect subcommand flags.
 
 | Command | Description |
 | --- | --- |
-| `munch login [key]` | Check the format of your `tm_` API key and save it (`--url` sets a self-hosted ingest URL, `--listen` the proxy address) |
-| `munch run` | Run in the foreground (`--verbose` logs captured metadata per call) |
+| `munch login [--url URL] [--listen ADDR] [key]` | Check the format of your `tm_` API key and save it; optionally set an ingest URL or listen address |
+| `munch run [--verbose]` | Run in the foreground; `--verbose` logs captured metadata per call |
 | `munch start` / `stop` / `restart` | Start, stop, or restart the background daemon ([details](#restarts-and-the-fallback)) |
-| `munch install [--yes] [--no-shell] [--no-codex]` | Set up the proxy and offer to configure OMP, the shell profile, and Codex (see [Quick Start](#quick-start)) |
-| `munch update` | Verify and install a newer stable Munch binary in place; restart a running daemon separately |
-| `munch uninstall` | Stop and remove the service and remove managed shell and Codex setup; keeps the binary, config and state directories, and the `omp-tokenmunchers` plugin ([details](#munch-uninstall)) |
+| `munch install [--yes] [--no-shell] [--no-codex] [--no-desktop]` | Set up the proxy and offer to configure desktop collection on Windows, OMP, the shell profile, and Codex ([flags](#munch-install-flags)) |
+| `munch update` | Verify and install a newer stable Munch binary in place on Linux or macOS; restart the daemon separately |
+| `munch uninstall` | Remove the service and Munch-managed shell, Codex, and Claude telemetry setup; keep the binary, config, state, and `omp-tokenmunchers` plugin ([details](#munch-uninstall)) |
 | `munch status [--json]` | Show runtime status, uptime, queue depth, delivered counts, last error, and desktop pending status |
 | `munch desktop` | Show desktop collector status |
-| `munch desktop claude on/off` or `munch desktop codex on/off` | Enable or disable a desktop collector; restart the daemon to apply |
+| `munch desktop claude on` / `munch desktop claude off`; `munch desktop codex on` / `munch desktop codex off` | Enable or disable a desktop collector; restart the daemon to apply |
 | `munch desktop claude-env` | Print the private Claude Desktop telemetry environment as a JSON string map |
 | `munch pause` / `resume` | Stop/resume recording usage (AI traffic keeps proxying uninterrupted); persists across restarts |
 | `munch flush` | Force-flush queued usage events immediately |
-| `munch env [--check] [--unset] [--shell ...]` | Emit shell exports for common inference providers. When `omp` is on `PATH` or `omp_via_plugin` is set it also emits an `omp` wrapper that runs OMP without `OLLAMA_HOST` (or without every export when `omp_via_plugin` is set); `--unset` removes the wrapper too |
+| `munch backfill [--codex-home DIR] [--from UTC --before UTC] [--upload]` | Preview retained Codex usage; upload requires both independently verified RFC3339 UTC bounds and interactive confirmation ([details](#codex-history-backfill)) |
+| `munch env [--check=false] [--unset] [--shell SHELL]` | Emit shell exports (`sh`, `bash`, `zsh`, `fish`, or `powershell`; auto-detected by default). Use `--check=false` to skip daemon verification. Also emits the [OMP wrapper](#oh-my-pi-omp-tm) when applicable; `--unset` removes it along with the exports |
 | `munch exec -- <cmd...>` | Verify the local daemon and run a command with private proxy URLs. `omp` gets the same variables its shell wrapper leaves out (and a one-line note when omp-tm is on) |
 | `munch stats [--period today\|week\|all]` | Inspect local metadata-only usage summary (UTC) |
 | `munch routes [--show-local-urls]` | List upstream targets; print private local URLs only on explicit request |
-| `munch --version` | Print the version, OS, and architecture |
+| `munch version` (`--version`, `-v`) | Print the version, OS, and architecture |
+| `munch help` (`--help`, `-h`) | Print the command list; also shown when no command is given |
 
 ---
 
@@ -584,7 +595,7 @@ When an upstream reports cost directly (OpenRouter `usage.cost`, xAI `cost_in_us
 ## Troubleshooting
 
 - **`install` says munch did not answer within 10 seconds.** Run `munch status`, then read `journalctl --user -u tmproxy` (systemd) or `tmproxy.log` in the state directory. If another program holds port 8787, pick another loopback port with `munch login --listen 127.0.0.1:<port>` and run `munch install` again.
-- **Usage doesn't appear on the dashboard.** `munch status` shows whether reporting is paused, the queue depth, and the last delivery error; `munch flush` retries at once. Tools started before `munch install` don't go through the proxy: open a new terminal or restart them.
+- **Usage doesn't appear on the dashboard.** Backfilled Codex usage counts toward leaderboard totals, not **Activity**. For live usage, check `munch status` for pause state, queue depth, and delivery errors; `munch flush` retries queued proxy events. Restart any tools opened before you applied routing.
 - **Old plain URLs stopped working.** Unauthenticated URLs such as `http://127.0.0.1:8787/openai/v1` no longer work. Re-run `munch install` (it restarts the daemon), or restart the daemon and re-run `munch env --check`, then start a new shell. Use `munch env --unset` to clear stale exports, and [step 3](#3-point-your-tools-at-munch) for SDKs configured by hand.
 - **Codex: "workspace backend must use an HTTPS origin".** An old plain-HTTP `chatgpt_base_url` is still in Codex's `config.toml`. `munch install` offers to remove it, or delete the line yourself.
 - **Codex skipped by `install`, or Codex cannot connect.** The `Codex:` line of `install` says why it left the config alone; fix that or use the [manual setup](#4-codex-chatgpt-sign-in). After `munch uninstall`, or after `local-auth.key` changed, revert any Munch settings Codex still has, or run `munch install` again.

@@ -4,7 +4,7 @@
 
 Checked: 2026-10-24. Scope: repository review and integration research; no application implementation changes. Upstream `main`/`dev` links describe inspected source, not a tested minimum release.
 
-**Backfill follow-up:** Current scope is Claude Code and Codex only. The [focused backfill analysis](claude-codex-backfill.md) supersedes the telemetry-first recommendation below when historical imports are required: prefer shared local parsing with explicit accounting-quality limits. Claude historical output completeness and legacy Codex reconstruction remain validation gates.
+**Status (2026-11-22):** Munch 0.1.7 collects local Claude Desktop Code sessions via telemetry and local Codex desktop sessions from rollouts. It also imports observed Codex history; Claude Code history and legacy Codex reconstruction remain unavailable. See the [backfill review](claude-codex-backfill.md#8-munch-issue-4-observed-codex-import) for the limits. The recommendation and architecture below describe the original review, not current support.
 
 ## Recommendation
 
@@ -16,7 +16,7 @@ Combined leaderboard totals can use the current backend contract. Per-harness br
 
 ## Repository architecture
 
-Current integration: **Oh My Pi (OMP)** only, packaged as `omp-tokenmunchers`.
+At the time of review, **Oh My Pi (OMP)** was the only integration, packaged as `omp-tokenmunchers`.
 
 ```mermaid
 flowchart LR

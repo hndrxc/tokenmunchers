@@ -10,7 +10,7 @@ Production project: `tokenmunchers` (`fywgkzqgtitpwijweojk`, us-east-2).
 OMP plugin ──POST /functions/v1/ingest──▶ ingest  ──rpc ingest()─────────▶ Postgres ──Realtime──▶ dashboard
            ──POST /functions/v1/history─▶ history ──rpc ingest_history()──┘   │
 munch ─────POST /functions/v1/ingest──────┘                                    ├─ pg_cron: rollups, retention, presence
-munch desktop ──POST /functions/v1/contributions─▶ contributions ──rpc publish_contributions()─▶ Postgres
+munch desktop / munch backfill ──POST /functions/v1/contributions─▶ contributions ──rpc publish_contributions()─▶ Postgres
 ```
 
 - The Edge Functions check every field of a request against an allowlist and hash the API key. They then call `security definer` functions with the secret key. No client role can write usage data.
@@ -27,7 +27,7 @@ munch desktop ──POST /functions/v1/contributions─▶ contributions ──r
 | `api_keys` | SHA-256 hash and a display prefix. The plaintext `tm_…` key is shown once, when created. | Until revoked or deleted |
 | `usage_events` | One row per reported ingest call. The OMP plugin reports calls from inside OMP; `munch` reports supported calls routed through its local proxy. Feeds Realtime, the activity feed, and the today/week totals. | Until the start of UTC day today−8 |
 | `usage_daily` | Daily totals per user, provider, model and subagent flag, computed from `usage_events` | Forever |
-| `usage_history` | Imported pre-install daily totals per user and device (`/munch backfill`) | Forever (each upload replaces that device's previous one) |
+| `usage_history` | Imported pre-install OMP daily totals per user and device (`/munch backfill` inside OMP) | Forever (each import replaces that device's previous one) |
 | `collector_contributions` | Permanently owned Claude Code/Codex canonical metadata, nullable accounting, history/live partition and supersession reservations | Until account deletion; source cleanup never deletes accepted rows |
 | `usage_daily_all` (view) | OMP `usage_daily` + `usage_history` + published collector contributions, with unknown-propagating sums, spend coverage and quality flags | n/a |
 | `live_sessions` | Presence. A user is live if a heartbeat arrived in the last 90 s. | Pruned after 10 min |
@@ -38,7 +38,7 @@ Deleting an account cascades to every row the user owns.
 
 `ingest` rejects events older than 7 days, so a late event (from a retry queue) always lands on a UTC day between today−7 and today. Every 10 minutes, the `tokenmunchers-rollup` job recomputes the daily totals for exactly those days. Raw rows are kept until the start of today−8, so a recomputed day always still has all its raw rows. A recompute therefore never replaces a correct daily total with a partial one.
 
-History and live data never overlap: the OMP plugin uploads history only for calls made before that machine's first live event.
+The OMP plugin avoids overlap by uploading history only for calls made before that machine's first live event. Codex backfill uses the contributions ledger instead and requires an independently verified pre-proxy window.
 
 ### Read access
 
@@ -97,7 +97,7 @@ A row has `day`, `provider`, `model`, `is_subagent`, `call_count`, the four toke
 
 ### `POST /functions/v1/contributions`
 
-The [munch desktop pilot](../proxy/README.md#desktop-accounting-pilot) posts eligible local Claude Code and Codex requests to this endpoint, and `munch backfill` uses it in append-only Codex mode. The native Claude Code and Codex collectors are retired; their accepted usage remains in the ledger. The same contribution ledger retains previously published usage; reading it doesn't depend on the endpoint being deployed. Proxy-routed calls use `ingest` instead, and the OMP plugin continues to report through `ingest` and `history`.
+The [Munch desktop collector](../proxy/README.md#desktop-accounting-pilot) posts eligible local Claude Code and Codex requests here. [`munch backfill`](../proxy/README.md#codex-history-backfill) uses the same endpoint in append-only Codex mode. Backfilled records count in leaderboard totals but do not appear in Activity. The retired native collectors' accepted usage remains in the ledger. Proxy-routed calls use `ingest`; the OMP plugin uses `ingest` and `history`.
 
 `recent_activity` reads committed contributions directly without a second ledger. It excludes historical, reconstructed, scoped-identity and superseded rows, and explicitly applies the UTC cutoff (start of UTC day today−8) only to collector activity, without expiring contributions from the ledger. Ingest activity relies on the existing `usage_events` retention policy. The dashboard polls it roughly every 30 seconds; the collector table isn't published through Realtime and contributions don't create **Live now** presence. Ingest activity still streams over Realtime.
 
@@ -249,8 +249,9 @@ supabase db push
 supabase functions deploy ingest history contributions
 ```
 
-Deploy server changes **before** publishing a plugin or Munch version that depends on them. Codex backfill specifically requires `20261122040000_codex_backfill.sql` and the updated `contributions` Edge Function.
-Apply the database migrations **before** deploying a dashboard that uses `recent_activity` and spend coverage. This change does not include a production deployment.
+Deploy server changes **before** publishing a plugin or Munch version that depends on them. Codex backfill requires [`20261122040000_codex_backfill.sql`](migrations/20261122040000_codex_backfill.sql) and the updated `contributions` Edge Function. Both were deployed to production on 2026-11-22; apply and deploy them for your own instance as well.
+
+Apply the database migrations **before** deploying a dashboard that uses `recent_activity` and spend coverage.
 
 If `supabase migration list` shows versions that don't match the local file names (for example, migrations applied by hand in the SQL editor), fix the history table with `supabase migration repair --status applied|reverted <version>` before pushing. This only edits the history table and never runs SQL.
 

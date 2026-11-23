@@ -57,7 +57,7 @@ The bot connects to PostgreSQL through a dedicated database user granted only th
 - **Definer wrapper:** `public.discord_leaderboard(p_period)` runs as `SECURITY DEFINER` with `SET search_path = ''`. Execution permissions are revoked from `PUBLIC`, `anon`, and `authenticated`, and granted strictly to `tokenmunchers_discord_reader`.
 - **Safe output:** The wrapper returns only aggregated statistics (`handle`, `display_name`, `total_tokens`, `subagent_tokens`, `cost_usd`). It never exposes auth IDs, emails, or per-call timestamps.
 - **Profile coverage:** Outer-joins `public.profiles` so all registered members appear. Only profiles with no usage receive zeros; unavailable accounting stays `null`.
-- **Earlier Claude Code/Codex usage:** Canonical Claude Code/Codex contributions uploaded earlier still enter the same period totals once. Unavailable tokens/cost display **Unknown**, are unranked, and propagate to the group total rather than becoming fake zeros. Main-only totals stay unknown when subagent attribution is missing. Notes explain that this usage may be reconstructed and USD can be reported or estimated, not invoices. The bot's role gains no raw/staging table privileges.
+- **Claude Code and Codex contributions:** Desktop usage, Codex history imported by `munch backfill`, and usage accepted from retired collectors enter the same leaderboard totals once. Unavailable tokens or cost display as **Unknown**, are unranked, and propagate to the group total rather than becoming fake zeros. Notes explain that usage may be reconstructed and USD amounts may be reported or estimated; they are not invoices. The bot's role gains no raw or staging table privileges.
 
 ### Provisioning the Login User
 
@@ -206,7 +206,7 @@ For production deployments, run the bot as a managed persistent service (e.g. us
 - **Subagents toggle behavior:**
   - When `subagents: False` and `metric: tokens`, subagent tokens are subtracted from each member's total (`total_tokens - subagent_tokens`, clamped at 0).
   - When `subagents: True` and `metric: tokens`, members with subagent usage display their subagent share (e.g. `(42% subagent)`).
-  - **Cost totals:** Cost figures represent overall expenditures recorded by OMP and history imports. Cost totals always include subagents regardless of the toggle setting; an informational note clarifies this in cost embeds.
+  - **Cost totals:** The cost metric includes reported or estimated USD across ingest and imported usage. If any included cost is unavailable, the total is **Unknown**. Cost totals always include subagents; the toggle does not change them.
 - **Discord formatting safety:**
   - Display names are escaped against Discord Markdown syntax (`*`, `_`, `~`, `` ` ``, `|`, `<`, `>`, `:`, `@`, `#`).
   - Mentions are suppressed (`allowedMentions: { parse: [] }`) to prevent unintended pings.

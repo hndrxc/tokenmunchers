@@ -1,6 +1,6 @@
 # TokenHub integration exploration
 
-*Note: the native Claude Code and Codex plugins and the collector (`integrations/`) were removed. Those tools are now reported through `munch`. Paths to `integrations/` below refer to removed code.*
+**Status (2026-11-22):** The native Claude Code and Codex collectors under `integrations/` have been removed. Munch now handles supported routed calls and desktop usage, and Munch 0.1.7 adds [observed Codex history import](../proxy/README.md#codex-history-backfill), not Claude Code history import. The collector descriptions below refer to the pinned review snapshot, not the current implementation.
 
 **Date:** 2026-11-19 | **Status:** research only; every design below is a **proposal**. No application code, schema, or dependency was changed.
 
@@ -150,15 +150,17 @@ Compare each option on accounting ownership, stable identity, token semantics, h
 
 ## 4. TokenMunchers facts relevant to integration
 
+This section describes the pinned review snapshot. For the current endpoint, including append-only Codex backfill, see the [Supabase contributions contract](../supabase/README.md#post-functionsv1contributions).
+
 ### 4.1 Ingestion paths and what already owns what
 
-| Harness | Owner today | Path | Identity | Evidence |
+| Harness | Owner at review | Path | Identity | Evidence |
 | :--- | :--- | :--- | :--- | :--- |
-| OMP | `plugin/` | `ingest` (live events) + `history` (daily aggregates from `omp stats`) | `event_id` = UUIDv5 of `sessionKey\|timestamp\|provider\|model` (`plugin/src/adapter.ts#L84`, doc comment: reported and back-filled calls land once via conflict-ignore on `event_id`) | `docs/harness-support-review.md` is *pre-collector*; use `supabase/README.md#L71-L94` for the current contract |
+| OMP | `plugin/` | `ingest` (live events) + `history` (daily aggregates from `omp stats`) | `event_id` = UUIDv5 of `sessionKey\|timestamp\|provider\|model` (`plugin/src/adapter.ts#L84`, doc comment: reported and back-filled calls land once via conflict-ignore on `event_id`) | `docs/harness-support-review.md` predates the native collectors |
 | Claude Code | `integrations/claude-code` | `contributions` | `message:<id>` > `request:<id>` > scoped sha256 (`integrations/claude-code/src/identity.ts`) | output is `null` unless reconciled with saved cost-state; cost unknown |
 | Codex | `integrations/codex` | `contributions` | response ID; `legacy:<hash>` reconstructed intervals | `integrations/codex/src/parser.ts` |
 
-Contributions are metadata-only, explicitly consented per harness, per-device UUID, immutable cutoff, pause windows, and are **never** posted via `ingest`/`history` (`supabase/README.md#L95-L97`).
+In the reviewed implementation, contributions were metadata-only with explicit per-harness consent, a per-device UUID, an immutable cutoff, and pause windows. They were not posted via `ingest` or `history`.
 
 ### 4.2 The `contributions` contract (existing seam)
 

@@ -2,6 +2,8 @@
 
 *Note: the native Claude Code and Codex plugins and the collector (`integrations/`) were removed. Those tools are now reported through `munch`. Paths to `integrations/` below refer to removed code.*
 
+**Status (2026-11-22):** Observed Codex usage backfill shipped in Munch 0.1.7; the database migration and updated `contributions` function are deployed to production. See [section 8](#8-munch-issue-4-observed-codex-import) for the import rules and [section 9](#9-codex-desktop-compatibility-check) for desktop compatibility. Claude Code history import remains unavailable.
+
 **Date:** 2026-10-27 | **Scope:** Design review for Claude Code and OpenAI Codex CLI in `tokenmunchers`  
 **Sources:** Upstream repositories and packages at pinned commits. No application code changes.  
 - **Claude Code:** Embedded commit `f375cd85d4f7` inside [`@anthropic-ai/claude-agent-sdk@0.3.312`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) (`manifest.json`), [Monitoring Docs](https://code.claude.com/docs/en/monitoring-usage), [Sessions Docs](https://code.claude.com/docs/en/sessions), [Cost Tracking Docs](https://code.claude.com/docs/en/agent-sdk/cost-tracking). Note: Transcript schema is internal and version-specific without public SLA.  
@@ -120,11 +122,11 @@ Commit [`53885816`](https://github.com/openai/codex/commit/53885816) introduced 
 | :--- | :--- | :--- |
 | **Token normalization** | Disjoint categories and conservation checks against recorded usage. | Source/test evidence exists; validate each supported format/provider. |
 | **Claude historical output** | Establish final output availability and attribution in actual retained transcript fixtures. | Unresolved; assistant placeholders cannot be treated as final counts. |
-| **Forks, subagents, and mixed Codex formats** | Count newly incurred usage once without counting inherited prefixes. | Requires versioned, realistic fixtures and parser smoke. |
-| **Legacy Codex quality** | Distinguish reconstructed totals, unknown call count, ambiguous ranges, and missing metadata. | Requires storage/UI quality semantics and validated reconstruction. |
-| **Retention-safe reimport** | Preserve accepted contributions when upstream files disappear; rerunning one import does not add again. | Requires durable local ledger or server contract change. |
-| **Upload replacement** | Do not expose a partial replacement after an interrupted multi-chunk import. | Existing reset-first chunk sequence is not atomic across requests; use one bounded request where possible or staged commit for larger snapshots. |
-| **Cross-machine ownership** | Do not count a copied archive twice. | Explicit ownership policy or server-side contribution deduplication required. |
+| **Forks, subagents, and mixed Codex formats** | Count newly incurred usage once without counting inherited prefixes. | Implemented for observed Codex responses: inherited prefixes are excluded and cumulative counters are not imported, including in mixed-format rollouts. |
+| **Legacy Codex quality** | Distinguish reconstructed totals, unknown call count, ambiguous ranges, and missing metadata. | Open; Munch does not reconstruct usage from legacy cumulative counters. |
+| **Retention-safe reimport** | Preserve accepted contributions when upstream files disappear; rerunning one import does not add again. | Resolved for Codex by the append-only server ledger: absent records are not removed and existing response identities are skipped. |
+| **Upload replacement** | Do not expose a partial replacement after an interrupted multi-chunk import. | Resolved for Codex: chunks are staged and published in a single commit; backfill appends rather than replacing accepted rows. |
+| **Cross-machine ownership** | Do not count a copied archive twice. | Mitigated for observed Codex contributions: the server deduplicates response IDs per account and harness across source devices. This does not deduplicate proxy ingest. |
 
 ## 8. Munch issue #4: observed Codex import
 
