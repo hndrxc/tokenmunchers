@@ -9,9 +9,10 @@
 // and prefers a plain .jsonl over its compressed sibling. A record is kept
 // only when its thread_id matches the rollout's own session_meta id, its
 // disjoint token buckets validate against the source totals, and it lies in
-// [From, Before). Missing provider/model stay literally "unknown"; missing
-// parent/subagent knowledge stays nil. Observed munch_chatgpt usage before
-// the exclusive cutoff contradicts the attested pre-proxy window.
+// [From, Before) when a window is supplied. Missing provider/model stay
+// literally "unknown"; missing parent/subagent knowledge stays nil. Observed
+// munch_chatgpt usage before an explicit cutoff contradicts the attested
+// pre-proxy window.
 package backfill
 
 import (
@@ -58,7 +59,6 @@ const (
 	ExclMissingTimestamp      = "missing_timestamp"
 	ExclInvalidTimestamp      = "invalid_timestamp"
 	ExclOutsideWindow         = "outside_window"
-	ExclNoWindow              = "no_window"
 )
 
 const (
@@ -77,7 +77,7 @@ const (
 const maxLineBytes = 8 << 20
 
 // Window defines the scan interval, inclusive of From and exclusive of Before.
-// A zero Window means no verified interval exists.
+// A zero Window imposes no date filter and is for preview only.
 type Window struct {
 	From   time.Time
 	Before time.Time
@@ -118,9 +118,9 @@ type Preview struct {
 	Excluded map[string]int
 }
 
-// Scan returns the preview for window. An empty root (missing default Codex
-// home) is an empty successful preview. A zero window excludes modern
-// candidates as no_window while still counting legacy/diagnostic exclusions.
+// Scan returns observed Codex candidates, excluding recognized Munch proxy and
+// Desktop overlap. With no window, candidates are for preview only, not a
+// verified upload set. An empty root is an empty successful preview.
 func Scan(ctx context.Context, root string, window Window, desktop DesktopOwnership) (Preview, error) {
 	if root == "" {
 		return Preview{Excluded: map[string]int{}}, nil
@@ -766,10 +766,7 @@ func handleRecord(env *wireLine, ordinal uint64, ordOK bool, st *fileState, wind
 	// Registration happens regardless of window membership so that an eligible
 	// copy is still compared against a post-window copy of the same response.
 	eligible := true
-	if window.IsZero() {
-		eligible = false
-		excl[ExclNoWindow]++
-	} else if !ts.Before(window.Before) || ts.Before(window.From) {
+	if !window.IsZero() && (!ts.Before(window.Before) || ts.Before(window.From)) {
 		eligible = false
 		excl[ExclOutsideWindow]++
 	}

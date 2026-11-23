@@ -21,12 +21,13 @@ import (
 const backfillUsage = `Usage: munch backfill [flags]
 
 Preview retained Codex rollouts or local Claude Code history (CLI and Claude
-Desktop Code). The default is a read-only local preview. Upload requires
---from and --before in RFC3339 UTC (at most millisecond precision, both in the
-past, from < before). Independently verify that the entire interval predates
-Munch proxy use for the selected source, all included archives, and every
-included route. Upload requires interactive confirmation that defaults to no;
-there is no --yes bypass.
+Desktop Code). With no window flags, preview all retained history locally.
+To limit the preview, supply both --from and --before in RFC3339 UTC (at
+most millisecond precision, both in the past, from < before). Upload requires
+explicit pre-proxy --from and --before bounds. Independently verify that the
+entire interval predates Munch proxy use for the selected source, all included
+archives, and every included route. Upload requires interactive confirmation
+that defaults to no; there is no --yes bypass.
 `
 
 func (a *App) cmdBackfill(args []string) error {
@@ -62,18 +63,30 @@ func (a *App) cmdBackfill(args []string) error {
 	default:
 		return fmt.Errorf("unknown --harness %q; choose codex or claude-code", *harness)
 	}
-	incompatible := false
+	var incompatible, boundsSpecified bool
 	fs.Visit(func(f *flag.Flag) {
 		incompatible = incompatible || f.Name == wrongHome
+		boundsSpecified = boundsSpecified || f.Name == "from" || f.Name == "before"
 	})
 	if incompatible {
 		return fmt.Errorf("--%s is incompatible with --harness %s", wrongHome, *harness)
 	}
+	var window backfill.Window
+	if boundsSpecified || *upload {
+		var valid bool
+		window, valid = parseVerifiedWindow(*fromStr, *beforeStr)
+		if !valid {
+			if *upload {
+				return errors.New("upload requires a valid, independently verified pre-proxy window with explicit --from and --before bounds")
+			}
+			return errors.New("supply both --from and --before in RFC3339 UTC (at most millisecond precision, both in the past, from < before)")
+		}
+	}
+
 	root, err := resolveBackfillRoot(*harness, homeOverride)
 	if err != nil {
 		return err
 	}
-	window, verified := parseVerifiedWindow(*fromStr, *beforeStr)
 
 	paths, err := resolvePaths(*cfgDir, *stateDir)
 	if err != nil {
@@ -100,13 +113,10 @@ func (a *App) cmdBackfill(args []string) error {
 	if err != nil {
 		return err
 	}
-	a.printBackfillPreview(*harness, root, window, verified, preview)
+	a.printBackfillPreview(*harness, root, window, preview)
 
 	if !*upload {
 		return nil
-	}
-	if !verified {
-		return errors.New("upload requires a valid, independently verified --from/--before window")
 	}
 	if preview.Excluded[backfill.ExclWindowContradiction] > 0 {
 		return errors.New("recorded Munch usage contradicts the pre-proxy window")
@@ -205,23 +215,30 @@ func parseVerifiedWindow(from, before string) (backfill.Window, bool) {
 // digits. Any other zone, finer precision, or malformed value is rejected.
 func parseUTCRFC3339(s string) (time.Time, bool) {
 	s = strings.TrimSpace(s)
+	var local string
+	switch {
+	case strings.HasSuffix(s, "Z"):
+		local = strings.TrimSuffix(s, "Z")
+	case strings.HasSuffix(s, "+00:00"):
+		local = strings.TrimSuffix(s, "+00:00")
+	default:
+		return time.Time{}, false
+	}
+	const secondLen = len("2006-01-02T15:04:05")
+	// Go's parser also accepts comma fractions and more than three digits,
+	// even when the parsed timestamp lands exactly on a millisecond.
+	if len(local) != secondLen &&
+		(len(local) < secondLen+2 || len(local) > secondLen+4 || local[secondLen] != '.') {
+		return time.Time{}, false
+	}
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return time.Time{}, false
-	}
-	if !strings.HasSuffix(s, "Z") && !strings.HasSuffix(s, "+00:00") {
-		return time.Time{}, false
-	}
-	if _, offset := t.Zone(); offset != 0 {
-		return time.Time{}, false
-	}
-	if t.Nanosecond()%1_000_000 != 0 {
 		return time.Time{}, false
 	}
 	return t, true
 }
 
-func (a *App) printBackfillPreview(harness, root string, window backfill.Window, verified bool, preview backfill.Preview) {
+func (a *App) printBackfillPreview(harness, root string, window backfill.Window, preview backfill.Preview) {
 	label, homeLabel := "Codex", "Codex"
 	if harness == backfill.HarnessClaude {
 		label, homeLabel = "Claude Code (CLI and Desktop local Code)", "Claude"
@@ -230,21 +247,18 @@ func (a *App) printBackfillPreview(harness, root string, window backfill.Window,
 	if root != "" {
 		fmt.Fprintf(a.Stdout, "  %s home: %q\n", homeLabel, root)
 	}
-	if verified {
+	if !window.IsZero() {
 		fmt.Fprintf(a.Stdout, "  Window:     %s (inclusive) to %s (exclusive)\n", utcStamp(window.From), utcStamp(window.Before))
 		if harness == backfill.HarnessClaude {
 			fmt.Fprintln(a.Stdout, "              Independently verify this was pre-proxy on every included archive and route.")
 		} else {
 			fmt.Fprintln(a.Stdout, "              Applies to all included archives on ChatGPT and API-key routes.")
 		}
-	} else {
-		fmt.Fprintln(a.Stdout, "  Window:     none; supply independently verified --from and --before (RFC3339 UTC)")
-	}
-	if harness == backfill.HarnessClaude && !verified {
-		fmt.Fprintf(a.Stdout, "  Verified observed candidates: %d records\n", len(preview.Records))
-		fmt.Fprintln(a.Stdout, "  Eligible:   0 records; no candidates are eligible to upload without a verified pre-proxy window.")
-	} else {
 		fmt.Fprintf(a.Stdout, "  Eligible:   %d records\n", len(preview.Records))
+	} else {
+		fmt.Fprintln(a.Stdout, "  Window: all retained history")
+		fmt.Fprintf(a.Stdout, "  Candidates: %d records\n", len(preview.Records))
+		fmt.Fprintln(a.Stdout, "  Upload requires explicit pre-proxy --from and --before bounds.")
 	}
 	var min, max time.Time
 	var input, output, cacheRead, cacheWrite int64

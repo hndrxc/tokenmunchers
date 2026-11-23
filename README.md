@@ -79,8 +79,8 @@ Run `munch status` in your terminal or `/munch` inside OMP. Make a request in a 
 ### 5. Import your history (optional)
 
 - **OMP:** Run `/munch backfill` inside OMP. It previews the import and uploads only daily totals per model. Use `--exclude` to skip projects; repeating an upload replaces the previous one. See the [plugin README](plugin/README.md).
-- **Codex:** Run `munch backfill` in your terminal to preview retained usage. To upload, independently verify a pre-proxy UTC window, pass `--from` and `--before`, and confirm with `yes`. Desktop-collected usage is excluded, and the server keeps one copy per Codex response ID. [Codex backfill](proxy/README.md#codex-history-backfill) counts toward leaderboard totals but doesn't appear in Activity.
-- **Claude Code:** Run `munch backfill --harness claude-code` to preview retained CLI and local Desktop Code usage. Only requests with verified final counts qualify. Upload requires the Claude backfill server update and the same verified pre-proxy window and confirmation. See [Claude Code backfill](proxy/README.md#claude-code-history-backfill).
+- **Codex:** Run `munch backfill` to preview all retained usage. To upload, independently verify a pre-proxy UTC window, pass `--from` and `--before`, and confirm with `yes`. Desktop-collected usage is excluded, and the server keeps one copy per Codex response ID. [Codex backfill](proxy/README.md#codex-history-backfill) counts toward leaderboard totals but doesn't appear in Activity.
+- **Claude Code:** Run `munch backfill --harness claude-code` to preview all retained CLI and local Desktop Code usage with verified final counts. Upload requires the Claude backfill server update and the same verified pre-proxy window and confirmation. See [Claude Code backfill](proxy/README.md#claude-code-history-backfill).
 
 ## Everyday use
 

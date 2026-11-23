@@ -76,18 +76,38 @@ func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Eligible:   2 records") || !strings.Contains(out, "desktop_collected: 1") {
 		t.Fatalf("local preview: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
-	if code, out, stderr := run(""); code != 0 || !strings.Contains(out, "0 records") {
+	if code, out, stderr := run(""); code != 0 ||
+		!strings.Contains(out, "Window: all retained history") || !strings.Contains(out, "Candidates: 2 records") ||
+		!strings.Contains(out, "Upload requires explicit pre-proxy --from and --before") ||
+		!strings.Contains(out, "desktop_collected: 1") || !strings.Contains(out, "total=123") ||
+		strings.Contains(out, "Eligible:") {
 		t.Fatalf("preview without a window: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
 	future := time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339)
+	if code, out, stderr := run("yes\n", "--upload"); code == 0 || out != "" ||
+		!strings.Contains(stderr, "explicit --from and --before") {
+		t.Fatalf("upload without a window: exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
 	for _, bounds := range [][]string{
-		nil,
+		{"--from", window[1]},
+		{"--before", window[3]},
+		{"--from="},
+		{"--before="},
+		{"--from=", "--before="},
+		{"--from", "not-a-date", "--before", window[3]},
 		{"--from", window[1], "--before", future},
 		{"--from", "2026-01-01T00:00:00.1234Z", "--before", window[3]},
+		{"--from", "2026-01-01T00:00:00.1230Z", "--before", window[3]},
+		{"--from", "2026-01-01T00:00:00,123Z", "--before", window[3]},
 		{"--from", window[3], "--before", window[1]},
 	} {
-		if code, out, _ := run("yes\n", append([]string{"--upload"}, bounds...)...); code == 0 {
-			t.Fatalf("upload accepted invalid window %v: %s", bounds, out)
+		if code, out, stderr := run("", bounds...); code == 0 || out != "" ||
+			!strings.Contains(stderr, "supply both --from and --before") {
+			t.Errorf("preview with window %v: exit %d, stdout %q, stderr %q", bounds, code, out, stderr)
+		}
+		if code, out, stderr := run("yes\n", append([]string{"--upload"}, bounds...)...); code == 0 || out != "" ||
+			!strings.Contains(stderr, "upload requires a valid, independently verified") {
+			t.Errorf("upload with window %v: exit %d, stdout %q, stderr %q", bounds, code, out, stderr)
 		}
 	}
 	for _, stdin := range []string{"", "\n", "no\n"} {
@@ -198,10 +218,10 @@ func TestClaudeBackfillPreviewAndConsent(t *testing.T) {
 		return runApp(stdin, append(args, extra...)...)
 	}
 	code, out, stderr := run("")
-	if code != 0 || !strings.Contains(out, "Verified observed candidates: 1 records") ||
-		!strings.Contains(out, "no candidates are eligible to upload") ||
+	if code != 0 || !strings.Contains(out, "Window: all retained history") || !strings.Contains(out, "Candidates: 1 records") ||
+		!strings.Contains(out, "Upload requires explicit pre-proxy --from and --before") ||
 		!strings.Contains(out, "input=2 output=83 cache_read=4 cache_write=1700 total=1789") ||
-		strings.Contains(out, "private transcript text") {
+		strings.Contains(out, "Eligible:") || strings.Contains(out, "private transcript text") {
 		t.Fatalf("local preview: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
 	if code, out, stderr := run("yes\n", "--upload", "--from", "2026-01-01T00:00:00Z"); code == 0 ||
@@ -209,7 +229,7 @@ func TestClaudeBackfillPreviewAndConsent(t *testing.T) {
 		t.Fatalf("incomplete window: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(root, "missing"))
-	if code, out, stderr := run(""); code != 0 || !strings.Contains(out, "Verified observed candidates: 0 records") {
+	if code, out, stderr := run(""); code != 0 || !strings.Contains(out, "Candidates: 0 records") {
 		t.Fatalf("missing default home: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
 	code, out, stderr = run("\n", "--claude-home", root, "--upload",

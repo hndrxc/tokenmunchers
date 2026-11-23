@@ -196,12 +196,12 @@ Then restart Codex (start a new `codex` process) and make a request. `requires_o
 
 ### Codex history backfill
 
-`munch backfill` previews usage locally. It reads retained Codex `sessions/` and `archived_sessions/` rollouts (`.jsonl` and `.jsonl.zst`), plus Munch's own config and desktop collector ledger (overridable with `--config-dir` and `--state-dir`), not the proxy log. It uses `$CODEX_HOME` or `~/.codex` unless you pass `--codex-home`. Run it separately for each independently verified source.
+`munch backfill` previews all retained Codex history by default. It reads `sessions/` and `archived_sessions/` rollouts (`.jsonl` and `.jsonl.zst`), plus Munch's own config and desktop collector ledger (overridable with `--config-dir` and `--state-dir`), not the proxy log. It uses `$CODEX_HOME` or `~/.codex` unless you pass `--codex-home`. Run it separately for each independently verified source.
 
 Before uploading, establish a UTC interval in which **none** of that source's selected history could have gone through Munch, including archives copied into it. Use independent evidence such as dated routing or deployment records covering both ChatGPT sign-in and API-key routes. A first retained proxy event or a file modification time does not establish this. If the evidence is incomplete, narrow the interval or don't upload. `--from` is inclusive and `--before` is exclusive; neither can be in the future.
 
 ```bash
-munch backfill  # local diagnostic preview; no window means no eligible records
+munch backfill  # preview all retained history locally
 
 # Example dates only: substitute the verified boundaries for your Codex home.
 munch backfill --from 2026-10-18T00:00:00Z --before 2026-11-17T00:00:00Z
@@ -222,7 +222,7 @@ Backfilled usage counts toward leaderboard totals but does not appear in the das
 
 `munch backfill --harness claude-code` previews retained local Claude Code CLI and Claude Desktop **Code → This computer** sessions, including subagent transcripts. It reads `projects/` under `$CLAUDE_CONFIG_DIR` or `~/.claude`; use `--claude-home` to select another home. It does not import ordinary chat, Cowork, or remote Desktop Code sessions.
 
-Without dates, preview reports verified candidates, not records eligible to upload. A request qualifies only when its saved counters reconcile against the latest cumulative `cost-state` for that model over a complete retained session. Munch deduplicates repeated assistant frames and fork copies. It does not treat a placeholder output count as final or add the cumulative summary as another call. If you see `unverified_output`, close the CLI session normally or archive a completed local Desktop Code session so Claude can save its final state. Missing, pruned, or inconsistent evidence remains ineligible.
+Without dates, preview reports verified candidates across all retained history; upload still requires explicit pre-proxy bounds. A request qualifies only when its saved counters reconcile against the latest cumulative `cost-state` for that model over a complete retained session. Munch deduplicates repeated assistant frames and fork copies. It does not treat a placeholder output count as final or add the cumulative summary as another call. If you see `unverified_output`, close the CLI session normally or archive a completed local Desktop Code session so Claude can save its final state. Missing, pruned, or inconsistent evidence remains ineligible.
 
 ```bash
 munch backfill --harness claude-code
