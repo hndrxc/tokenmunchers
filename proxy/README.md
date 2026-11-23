@@ -320,7 +320,7 @@ On Windows, the default install directory is `%LOCALAPPDATA%\Programs\Munch`, th
 | `<config>/prices.json` | Only if you create it ([pricing](#custom-model-pricing-pricesjson)) |
 | `<state>/queue.jsonl` (`0600`) | Events awaiting delivery; renamed to `queue.jsonl.<pid>.<n>.flushing` while sending, deleted once delivered |
 | `<state>/usage.jsonl` (`0600`) | One metadata line per recorded call, for `munch stats`; never trimmed or deleted by Munch |
-| `<state>/backfill-source-*.json` (`0600`) | Random upload source UUID and fixed window per Codex home; created only after upload confirmation. No records, API key, or source path. |
+| `<state>/backfill-source-*.json` (`0600`) | Random upload source UUID and fixed window per history home and harness (`backfill-source-claude-code-*.json` for Claude Code); created only after upload confirmation. No records, API key, or source path. |
 | `<state>/tmproxy.log`, `<state>/tmproxy.pid` | Daemon output under launchd and the fallback (systemd uses `journalctl --user -u tmproxy`); PID file for the fallback only, removed on stop |
 | `<state>/desktop/` | State and durable pending contributions for the [desktop accounting pilot](#desktop-accounting-pilot), separate from the proxy queue |
 | Claude `settings.json` (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) | Desktop telemetry env vars under `env`, written atomically with 2-space indented JSON (mode `0600` when created) by `munch install` and `munch desktop claude on`; only Munch's exact telemetry keys are ever updated or removed ([Desktop accounting pilot](#desktop-accounting-pilot)) |

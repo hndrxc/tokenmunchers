@@ -9,7 +9,7 @@ The [dashboard](https://tokenmunchers.taiisshort.com) shows live activity, daily
 | Part | What it is | Docs |
 | --- | --- | --- |
 | **Site** | Leaderboard, Activity, profiles, and API key settings. | [dashboard/](dashboard/README.md) |
-| **Service** | `ingest` receives live plugin and proxy calls, `history` receives OMP imports, and `contributions` receives live desktop usage and Codex backfill. | [supabase/](supabase/README.md) |
+| **Service** | `ingest` receives live plugin and proxy calls, `history` receives OMP imports, and `contributions` receives live desktop usage and Codex and Claude Code backfill. | [supabase/](supabase/README.md) |
 | **Database** | Postgres stores usage and rolls it up into daily totals. | [supabase/](supabase/README.md) |
 | **Plugin** | `omp-tokenmunchers` reports Oh My Pi usage and imports OMP history. | [plugin/](plugin/README.md) |
 | **Program** | `munch` proxies tools such as Claude Code, Codex, and Gemini, collects local desktop usage, and imports retained Codex and Claude Code history. | [proxy/](proxy/README.md) |
@@ -18,6 +18,7 @@ The [dashboard](https://tokenmunchers.taiisshort.com) shows live activity, daily
 
 - [Getting started](#getting-started)
 - [Windows PowerShell](#windows-powershell)
+- [Recommended commands after install](#4-recommended-commands-after-install)
 - [Everyday use](#everyday-use)
 - [Privacy](#privacy)
 - [Troubleshooting](#troubleshooting)
@@ -72,11 +73,26 @@ omp plugin install omp-tokenmunchers
 
 Start OMP and enter `/munch login tm_your_key_here`. See the [plugin README](plugin/README.md) for setup and configuration.
 
-### 4. Check the dashboard
+### 4. Recommended commands after install
+
+If you installed `munch`, these are the useful first commands. OMP-only users use [`/munch`](#omp-plugin-munch) instead.
+
+| Command | What it's for |
+| --- | --- |
+| `munch status` | Check that the service is running, your key is saved, and nothing is queued or failing |
+| `munch exec -- claude` | Run one CLI tool through Munch without changing your terminal (works for `codex` and other tools too) |
+| `munch env --shell powershell \| Out-String \| Invoke-Expression` | Windows: route tools started from this PowerShell window. On Linux/macOS, new terminals are already routed if you accepted shell setup. |
+| `munch desktop claude on`, then `munch restart` | Count Claude Desktop's local Code sessions; restart Claude Desktop afterward. Use `codex` for the Codex desktop app. |
+| `munch backfill` | Preview all retained Codex history (read-only) |
+| `munch backfill --harness claude-code` | Preview all retained Claude Code CLI and Desktop history (read-only) |
+| `munch backfill --before 2026-11-17 --upload` | Upload history before a cutoff you verified predates Munch; asks for confirmation. Add `--harness claude-code` for Claude. |
+| `munch stats` | Show tokens recorded on this machine today (`--period week` or `--period all` for more) |
+
+### 5. Check the dashboard
 
 Run `munch status` in your terminal or `/munch` inside OMP. Make a request in a configured tool, then look for it in the dashboard's **Activity** feed after the response finishes.
 
-### 5. Import your history (optional)
+### 6. Import your history (optional)
 
 - **OMP:** Run `/munch backfill` inside OMP. It previews the import and uploads only daily totals per model. Use `--exclude` to skip projects; repeating an upload replaces the previous one. See the [plugin README](plugin/README.md).
 - **Codex:** Run `munch backfill` to preview all retained usage. To upload, pass a verified pre-proxy cutoff as `--before` and confirm with `yes`. `--from` is optional. Desktop-collected usage is excluded, and the server keeps one copy per Codex response ID. [Codex backfill](proxy/README.md#codex-history-backfill) counts toward leaderboard totals but doesn't appear in Activity.

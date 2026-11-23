@@ -38,7 +38,7 @@ Deleting an account cascades to every row the user owns.
 
 `ingest` rejects events older than 7 days, so a late event (from a retry queue) always lands on a UTC day between today−7 and today. Every 10 minutes, the `tokenmunchers-rollup` job recomputes the daily totals for exactly those days. Raw rows are kept until the start of today−8, so a recomputed day always still has all its raw rows. A recompute therefore never replaces a correct daily total with a partial one.
 
-The OMP plugin avoids overlap by uploading history only for calls made before that machine's first live event. Codex backfill uses the contributions ledger instead and requires an independently verified pre-proxy window.
+The OMP plugin avoids overlap by uploading history only for calls made before that machine's first live event. Codex and Claude backfill use the contributions ledger instead and require an independently verified pre-proxy window.
 
 ### Read access
 
@@ -50,6 +50,7 @@ The Discord bot operates under a dedicated, read-only role (`tokenmunchers_disco
 | Function | Callable by | Description |
 | --- | --- | --- |
 | `leaderboard_since(timestamptz)` | Members | OMP raw events (up to 7 days back) plus collector contributions since the original timestamp |
+| `leaderboard(p_days int default 7)` | Members | `leaderboard_since(now() − p_days)`, with `p_days` clamped to 1–7 |
 | `leaderboard_all_time()` | Members | OMP history, past daily rollups and today's raw events, plus published collector contributions once |
 | `recent_activity(p_user_id uuid default null)` | Members | Newest 50 calls across members or newest 25 for the specified member, combining ingest events and committed live exact Claude Code/Codex requests labeled by source |
 | `create_api_key(label)` | Members | Creates a key and returns its plaintext once |

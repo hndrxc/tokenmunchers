@@ -18,9 +18,9 @@ Create an API key on the dashboard's Settings page, then run this inside OMP:
 
 `munch install` (see the [munch program](../proxy/README.md)) can do this for you: it installs this plugin and gives it your API key (omp-tm).
 
-`/munch` is the OMP plugin command. The terminal command [`munch backfill`](../proxy/README.md#codex-history-backfill) imports observed Codex history, not OMP history. For OMP history, use `/munch backfill` inside OMP.
+`/munch` is the OMP plugin command. The terminal command `munch backfill` imports observed [Codex](../proxy/README.md#codex-history-backfill) or [Claude Code](../proxy/README.md#claude-code-history-backfill) history, not OMP history. For OMP history, use `/munch backfill` inside OMP.
 
-If OMP is routed through the munch proxy and this plugin is enabled, each call is counted twice. `munch install` prevents this by running `omp` without the proxy variables.
+If OMP is routed through the munch proxy and this plugin is enabled, each call is counted twice. `munch install` prevents this by recording `omp_via_plugin`, so the `omp` wrapper from `munch env` runs `omp` without the proxy variables.
 
 ## Commands
 
@@ -54,7 +54,7 @@ Everything is under one command, `/munch`, with tab completion:
 | `is_subagent` | `true` for subagent and swarm calls |
 | `client_version` | Plugin version |
 
-Presence events (`session_start`, `heartbeat`, `session_end`) send only the session id, provider, model and session start time.
+Presence events (`session_start`, `heartbeat`) send the session id, provider, model and session start time; `session_end` sends just the session id.
 
 ### History import (`history`)
 
@@ -88,7 +88,7 @@ Only the transcript's *file name* goes into the hash, never its directory, becau
 
 ## Gap fill and backfill
 
-OMP indexes every session into a local SQLite database, `stats.db`. `omp stats` and `/usage` keep it up to date. The plugin opens it **read-only** and reads only these columns: `id`, `session_file`, `folder`, `timestamp`, `duration`, `provider`, `model`, the four token counts, `cost_total` and `agent_type`. `folder` is used only for the backfill preview and `--exclude`, and is never uploaded. Error messages, prompts and tool data are never read.
+OMP indexes every session into a local SQLite database, `stats.db`. `omp stats` (run by `/munch sync`) keeps it up to date. The plugin opens it **read-only** and reads only these columns: `id`, `session_file`, `folder`, `timestamp`, `duration`, `provider`, `model`, the four token counts, `cost_total` and `agent_type`. `folder` is used only for the backfill preview and `--exclude`, and is never uploaded. Error messages, prompts and tool data are never read.
 
 `state.json` records for this install: a random device id, **live since** (the time of the earliest call this machine delivered live), and how far the gap fill has scanned. Calls before "live since" belong to the history import; calls from then on are reported live. So the two never overlap.
 
