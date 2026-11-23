@@ -58,7 +58,8 @@ func (a *App) cmdDesktop(args []string) error {
 	switch {
 	case len(command) == 0:
 		fmt.Fprintf(a.Stdout, "Claude Desktop: %s\nCodex Desktop:  %s\n", desktopState(cfg.DesktopClaudeSince), desktopState(cfg.DesktopCodexSince))
-		fmt.Fprintln(a.Stdout, "Turn a source on or off with `munch desktop claude on|off` or `munch desktop codex on|off`, then run `munch restart`. Each source counts usage from when it was turned on; `munch backfill` imports earlier Codex usage.")
+		fmt.Fprintln(a.Stdout, "Turn a source on or off with `munch desktop claude on|off` or `munch desktop codex on|off`, then run `munch restart`. Each source counts usage from when it was turned on.")
+		fmt.Fprintln(a.Stdout, "Preview retained earlier usage with `munch backfill` for Codex or `munch backfill --harness claude-code` for Claude CLI and Desktop local Code.")
 		fmt.Fprintln(a.Stdout, "For Claude, munch adds or removes its telemetry settings in Claude's settings.json; restart Claude Desktop afterwards.")
 		fmt.Fprintln(a.Stdout, "If munch can't edit that file, `munch desktop claude-env` prints the settings to merge by hand.")
 		return nil

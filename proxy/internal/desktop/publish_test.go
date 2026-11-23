@@ -108,6 +108,15 @@ func TestDesktopSnapshotReplayAndIncrementalQueue(t *testing.T) {
 	if c.Pending() != 1 {
 		t.Fatalf("first batch left %d records", c.Pending())
 	}
+	owned, err := RecordedIDs(opts.Dir, Claude)
+	if err != nil || len(owned) != 101 {
+		t.Fatalf("ownership lookup lost pending or delivered IDs: count=%d err=%v", len(owned), err)
+	}
+	for _, id := range []string{"req_id0", "req_concurrent"} {
+		if _, ok := owned[id]; !ok {
+			t.Errorf("ownership lookup lost %s", id)
+		}
+	}
 	if _, err := c.publish(context.Background(), Claude); err != nil {
 		t.Fatal(err)
 	}

@@ -4,7 +4,7 @@
 
 Checked: 2026-10-24. Scope: repository review and integration research; no application implementation changes. Upstream `main`/`dev` links describe inspected source, not a tested minimum release.
 
-**Status (2026-11-22):** Munch 0.1.7 collects local Claude Desktop Code sessions via telemetry and local Codex desktop sessions from rollouts. It also imports observed Codex history; Claude Code history and legacy Codex reconstruction remain unavailable. See the [backfill review](claude-codex-backfill.md#8-munch-issue-4-observed-codex-import) for the limits. The recommendation and architecture below describe the original review, not current support.
+**Status:** Munch 0.1.7 collects local Claude Desktop Code sessions via telemetry and local Codex desktop sessions from rollouts, and imports observed Codex history. For the Claude Code CLI and local Desktop backfill implementation and verification, see the [backfill review](claude-codex-backfill.md#10-claude-code-cli-and-desktop-backfill). Legacy Codex reconstruction is not supported. The recommendation and architecture below describe the original review.
 
 ## Recommendation
 

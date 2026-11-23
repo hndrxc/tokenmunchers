@@ -86,18 +86,20 @@ type Window struct {
 // IsZero reports whether the window is the zero value.
 func (w Window) IsZero() bool { return w.From.IsZero() && w.Before.IsZero() }
 
-// DesktopOwnership reserves IDs already recorded by Munch's Codex desktop
-// collector, and timestamps at or after its current activation when enabled.
+// DesktopOwnership reserves IDs already recorded by the corresponding Munch
+// desktop collector, and timestamps at or after its current activation when enabled.
 type DesktopOwnership struct {
 	Since       time.Time
 	RecordedIDs map[string]struct{}
 }
 
 // Record is one observed, completed response: metadata only, never content.
-// SessionID is the record's thread_id; ParentSessionID is the owning thread's
-// parent (or fork origin) when known. Subagent is nil when unknown.
+// ResponseID is the Claude message ID. For Codex, SessionID is the thread_id
+// and ParentSessionID is the owning thread's parent (or fork origin) when known.
+// Subagent is nil when unknown.
 type Record struct {
 	ID              string    `json:"id"`
+	ResponseID      string    `json:"response_id,omitempty"`
 	Provider        string    `json:"provider"`
 	Model           string    `json:"model"`
 	SessionID       string    `json:"session_id"`

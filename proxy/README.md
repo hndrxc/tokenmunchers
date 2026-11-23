@@ -214,15 +214,33 @@ Only observed per-response usage qualifies. Cumulative counters, embedded checkp
 
 Usage timestamped at or after the current Codex desktop activation, or whose response ID is already in the desktop ledger even if collection is off, is excluded as `desktop_collected` because the collector reports it. This safeguard applies regardless of which Codex home is scanned. A missing desktop ledger is treated as empty, and an incomplete last line is ignored, as the collector itself does. An unreadable or malformed ledger stops both preview and upload rather than risking overlap. If backfill and the collector still report the same response, for example from another machine, TokenMunchers keeps one copy.
 
-The first confirmed upload fixes the window for that Codex home in Munch's state directory. If interrupted, rerun with the same window; unchanged records replay the same snapshot. Staged chunks are not visible before commit, and pruning rollouts never deletes usage already accepted. This does not recover post-cutover gaps or import Claude Code history.
+The first confirmed upload fixes the window for that Codex home in Munch's state directory. If interrupted, rerun with the same window; unchanged records replay the same snapshot. Staged chunks are not visible before commit, and pruning rollouts never deletes usage already accepted. Backfill does not recover post-cutover gaps.
 
 Backfilled usage counts toward leaderboard totals but does not appear in the dashboard's **Activity** feed. The Codex backfill migration and updated `contributions` function are deployed on hosted TokenMunchers. For self-hosting, see the [deployment steps](../supabase/README.md#deploying). [Format and overlap research](../docs/claude-codex-backfill.md#8-munch-issue-4-observed-codex-import).
+
+### Claude Code history backfill
+
+`munch backfill --harness claude-code` previews retained local Claude Code CLI and Claude Desktop **Code → This computer** sessions, including subagent transcripts. It reads `projects/` under `$CLAUDE_CONFIG_DIR` or `~/.claude`; use `--claude-home` to select another home. It does not import ordinary chat, Cowork, or remote Desktop Code sessions.
+
+Without dates, preview reports verified candidates, not records eligible to upload. A request qualifies only when its saved counters reconcile against the latest cumulative `cost-state` for that model over a complete retained session. Munch deduplicates repeated assistant frames and fork copies. It does not treat a placeholder output count as final or add the cumulative summary as another call. If you see `unverified_output`, close the CLI session normally or archive a completed local Desktop Code session so Claude can save its final state. Missing, pruned, or inconsistent evidence remains ineligible.
+
+```bash
+munch backfill --harness claude-code
+
+# Example dates only. Substitute the independently verified interval for your source.
+munch backfill --harness claude-code --from 2026-10-18T00:00:00Z --before 2026-11-17T00:00:00Z
+munch backfill --harness claude-code --from 2026-10-18T00:00:00Z --before 2026-11-17T00:00:00Z --upload
+```
+
+The same [pre-proxy window and confirmation rules](#codex-history-backfill) apply. Verify the interval for every included CLI or Desktop route and archive; if you cannot establish it, preview only. Munch excludes requests in the Desktop ledger, even if still pending or collection is now off. It also reserves potentially Desktop-owned usage around and after the current opt-in. The server keeps earlier live or legacy records and withholds candidates on UTC dates with overlapping legacy usage that has no comparable identity.
+
+Upload sends request and message IDs, the original UTC timestamp, token counts, and model/provider and subagent attribution when known. It sends no session IDs, paths, or conversation content. Cost is unknown. Reruns and copied files cannot duplicate accepted identities; transcript cleanup does not delete accepted history. Upload requires a server with the Claude backfill migration and updated `contributions` function. See [deployment steps](../supabase/README.md#deploying) and [verification evidence](../docs/claude-codex-backfill.md#10-claude-code-cli-and-desktop-backfill).
 
 ---
 
 ## Desktop accounting pilot
 
-The pilot is off by default. It counts eligible local desktop usage from opt-in onward without changing provider sign-in, subscription billing, or model routing. To import eligible earlier Codex usage, use the separate [history backfill](#codex-history-backfill) command. The pilot does not cover cloud sessions, Cowork, or ordinary Claude or ChatGPT chat, and does not claim macOS runtime support.
+The pilot is off by default. It counts eligible local desktop usage from opt-in onward without changing provider sign-in, subscription billing, or model routing. Use [Codex backfill](#codex-history-backfill) or [Claude Code backfill](#claude-code-history-backfill) for eligible earlier usage. The pilot does not cover cloud sessions, Cowork, or ordinary Claude or ChatGPT chat, and does not claim macOS runtime support.
 
 ### Build, opt in, and check status
 
@@ -541,7 +559,7 @@ All commands except `update`, help, and version accept `--config-dir` and `--sta
 | `munch desktop claude-env` | Print the private Claude Desktop telemetry environment as a JSON string map |
 | `munch pause` / `resume` | Stop/resume recording usage (AI traffic keeps proxying uninterrupted); persists across restarts |
 | `munch flush` | Force-flush queued usage events immediately |
-| `munch backfill [--codex-home DIR] [--from UTC --before UTC] [--upload]` | Preview retained Codex usage; upload requires both independently verified RFC3339 UTC bounds and interactive confirmation ([details](#codex-history-backfill)) |
+| `munch backfill [--harness codex\|claude-code] [--from UTC --before UTC] [--upload]` | Preview retained [Codex](#codex-history-backfill) or [Claude Code](#claude-code-history-backfill) usage; upload requires a verified pre-proxy window and interactive confirmation |
 | `munch env [--check=false] [--unset] [--shell SHELL]` | Emit shell exports (`sh`, `bash`, `zsh`, `fish`, or `powershell`; auto-detected by default). Use `--check=false` to skip daemon verification. Also emits the [OMP wrapper](#oh-my-pi-omp-tm) when applicable; `--unset` removes it along with the exports |
 | `munch exec -- <cmd...>` | Verify the local daemon and run a command with private proxy URLs. `omp` gets the same variables its shell wrapper leaves out (and a one-line note when omp-tm is on) |
 | `munch stats [--period today\|week\|all]` | Inspect local metadata-only usage summary (UTC) |

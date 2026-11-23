@@ -1,6 +1,6 @@
 # TokenHub integration exploration
 
-**Status (2026-11-22):** The native Claude Code and Codex collectors under `integrations/` have been removed. Munch now handles supported routed calls and desktop usage, and Munch 0.1.7 adds [observed Codex history import](../proxy/README.md#codex-history-backfill), not Claude Code history import. The collector descriptions below refer to the pinned review snapshot, not the current implementation.
+**Status:** The native Claude Code and Codex collectors under `integrations/` have been removed. Munch handles supported routed calls and desktop usage and implements [observed Codex history import](../proxy/README.md#codex-history-backfill) and [verified Claude Code history import](../proxy/README.md#claude-code-history-backfill). The collector descriptions below refer to the pinned review snapshot, not the current implementation.
 
 **Date:** 2026-11-19 | **Status:** research only; every design below is a **proposal**. No application code, schema, or dependency was changed.
 
@@ -150,7 +150,7 @@ Compare each option on accounting ownership, stable identity, token semantics, h
 
 ## 4. TokenMunchers facts relevant to integration
 
-This section describes the pinned review snapshot. For the current endpoint, including append-only Codex backfill, see the [Supabase contributions contract](../supabase/README.md#post-functionsv1contributions).
+This section describes the pinned review snapshot. For the current endpoint, including append-only Codex and Claude Code backfill, see the [Supabase contributions contract](../supabase/README.md#post-functionsv1contributions).
 
 ### 4.1 Ingestion paths and what already owns what
 

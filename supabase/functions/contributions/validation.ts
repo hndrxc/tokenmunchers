@@ -2,6 +2,8 @@ export const MAX_BODY_BYTES = 256 * 1024;
 export const MAX_CHUNKS = 1000;
 export const MAX_OBSERVATIONS = 500;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const claudeRequestID = /^req_[A-Za-z0-9_/-]+$/;
+const claudeResponseID = /^msg_[A-Za-z0-9_-]+$/;
 type Check = (value: unknown) => boolean;
 const text = (max: number): Check => v => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f]/.test(v);
 const oneOf = (...values: string[]): Check => v => typeof v === "string" && values.includes(v);
@@ -22,6 +24,10 @@ const observation: Record<string, Check> = {
   cost_usd: nullable(v => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 10_000),
   cost_basis: oneOf("reported", "estimated", "unknown"), quality: oneOf("observed", "reconstructed", "partial"),
 };
+const observationWithResponseID: Record<string, Check> = {
+  ...observation,
+  response_id: v => typeof v === "string" && v.length <= 128 && claudeResponseID.test(v),
+};
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -39,10 +45,9 @@ export function validateRequest(value: unknown): string | null {
     : common;
   const problem = fields(value, schema);
   if (problem) return problem;
-  if (value.action === "begin" && Object.hasOwn(value, "backfill_from")) {
-    if (value.harness !== "codex") return "backfill is codex-only";
-    if (Date.parse(value.backfill_from as string) >= Date.parse(value.cutoff as string)) return "backfill window must precede cutoff";
-  }
+  // Chunk requests do not carry the source mode; the RPC enforces it.
+  if (value.action === "begin" && Object.hasOwn(value, "backfill_from") &&
+      Date.parse(value.backfill_from as string) >= Date.parse(value.cutoff as string)) return "backfill window must precede cutoff";
   if (value.action !== "chunk") return null;
   const rows = value.observations as unknown[];
   const superseded = (value.superseded_canonical_ids ?? []) as unknown[];
@@ -56,9 +61,14 @@ export function validateRequest(value: unknown): string | null {
   }
   for (const row of rows) {
     if (!object(row)) return "observation must be an object";
-    const invalid = fields(row, observation);
+    const hasResponseID = Object.hasOwn(row, "response_id");
+    const invalid = fields(row, hasResponseID ? observationWithResponseID : observation);
     if (invalid) return invalid;
     if (row.harness !== value.harness) return "harness mismatch";
+    if (hasResponseID && (row.harness !== "claude-code" || row.identity_strength !== "request" ||
+        row.grain !== "request" || typeof row.canonical_id !== "string" ||
+        row.canonical_id.length > 128 || !claudeRequestID.test(row.canonical_id) ||
+        row.session_id !== null || row.parent_session_id !== null)) return "invalid Claude response identity";
     if ((row.cost_usd === null) !== (row.cost_basis === "unknown")) return "cost basis mismatch";
     if (row.grain === "reconstructed_interval" && (row.call_count !== null || row.quality !== "reconstructed")) return "invalid reconstructed quality/calls";
     const start = row.interval_start as string | null;

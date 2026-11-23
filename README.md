@@ -12,7 +12,7 @@ The [dashboard](https://tokenmunchers.taiisshort.com) shows live activity, daily
 | **Service** | `ingest` receives live plugin and proxy calls, `history` receives OMP imports, and `contributions` receives live desktop usage and Codex backfill. | [supabase/](supabase/README.md) |
 | **Database** | Postgres stores usage and rolls it up into daily totals. | [supabase/](supabase/README.md) |
 | **Plugin** | `omp-tokenmunchers` reports Oh My Pi usage and imports OMP history. | [plugin/](plugin/README.md) |
-| **Program** | `munch` proxies tools such as Claude Code, Codex, and Gemini, collects local desktop usage, and imports Codex history. | [proxy/](proxy/README.md) |
+| **Program** | `munch` proxies tools such as Claude Code, Codex, and Gemini, collects local desktop usage, and imports retained Codex and Claude Code history. | [proxy/](proxy/README.md) |
 
 ## Contents
 
@@ -80,8 +80,7 @@ Run `munch status` in your terminal or `/munch` inside OMP. Make a request in a 
 
 - **OMP:** Run `/munch backfill` inside OMP. It previews the import and uploads only daily totals per model. Use `--exclude` to skip projects; repeating an upload replaces the previous one. See the [plugin README](plugin/README.md).
 - **Codex:** Run `munch backfill` in your terminal to preview retained usage. To upload, independently verify a pre-proxy UTC window, pass `--from` and `--before`, and confirm with `yes`. Desktop-collected usage is excluded, and the server keeps one copy per Codex response ID. [Codex backfill](proxy/README.md#codex-history-backfill) counts toward leaderboard totals but doesn't appear in Activity.
-
-Claude Code history import is not available.
+- **Claude Code:** Run `munch backfill --harness claude-code` to preview retained CLI and local Desktop Code usage. Only requests with verified final counts qualify. Upload requires the Claude backfill server update and the same verified pre-proxy window and confirmation. See [Claude Code backfill](proxy/README.md#claude-code-history-backfill).
 
 ## Everyday use
 
@@ -108,7 +107,7 @@ See the [plugin README](plugin/README.md) for all commands and configuration.
 | `munch stats` | View usage recorded on this machine |
 | `munch exec -- <command>` | Run one command through the proxy, for example `munch exec -- claude` |
 | `munch desktop claude\|codex on\|off` | Toggle collection for Claude Desktop local Code sessions or Codex desktop sessions on “This computer” |
-| `munch backfill` | Preview or import Codex history |
+| `munch backfill [--harness codex\|claude-code]` | Preview or import retained Codex or Claude Code history (Codex by default) |
 | `munch uninstall` | Remove the background service and Munch-managed shell, Codex, and Claude `settings.json` telemetry settings. Keeps the binary, saved key and settings, and OMP plugin. |
 
 See the [munch README](proxy/README.md) for all commands and [what Munch changes](proxy/README.md#what-munch-changes).
@@ -155,7 +154,7 @@ Munch desktop collection and munch backfill → contributions ┘
 | Folder | What's in it | Docs |
 | --- | --- | --- |
 | [`plugin/`](plugin/) | The `omp-tokenmunchers` OMP plugin (TypeScript, runs on Bun) | [plugin/README.md](plugin/README.md) |
-| [`proxy/`](proxy/) | `munch`: local proxy, desktop collector, and Codex history import (Go 1.24) | [proxy/README.md](proxy/README.md) |
+| [`proxy/`](proxy/) | `munch`: local proxy, desktop collector, and Codex and Claude Code history import (Go 1.24) | [proxy/README.md](proxy/README.md) |
 | [`dashboard/`](dashboard/) | The web dashboard (Next.js, deployed on Vercel) | [dashboard/README.md](dashboard/README.md) |
 | [`discord-bot/`](discord-bot/) | Guild slash-command bot for Discord (Node.js, discord.js) | [discord-bot/README.md](discord-bot/README.md) |
 | [`supabase/`](supabase/) | Database schema, security rules, scheduled jobs and Edge Functions | [supabase/README.md](supabase/README.md) |

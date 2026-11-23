@@ -41,7 +41,7 @@ The leaderboard's period picker selects what each column shows and also drives e
 
 Activity reads the existing ledger and does not show historical, reconstructed, scoped-identity or superseded contributions. Both sources share the ingest feed's UTC retention horizon and are capped together at the newest 50 calls on the home page or newest 25 for a member. Previously published usage still contributes to totals where eligible, even after it ages out of Activity. Strong canonical IDs are owned once per user/harness across devices, and accepted contributions survive source cleanup. Source logs are not complete billing ledgers.
 
-Codex history imported with `munch backfill` also goes through the contributions endpoint. It counts toward eligible leaderboard totals but does not appear in **Activity** or **Recent calls**. Claude Code history import is not available.
+Codex and Claude Code history imported with `munch backfill` goes through the contributions endpoint. It counts toward eligible leaderboard totals but does not appear in **Activity** or **Recent calls**.
 
 For mixed usage, the dashboard shows known spend alongside unpriced token coverage. When there is usage but none of it is priced, spend is **Unknown**, not $0; an actual reported zero remains zero. The dashboard labels estimates separately and indicates when the unpriced token count itself is unknown.
 

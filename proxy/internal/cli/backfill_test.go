@@ -169,3 +169,68 @@ func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 		}
 	})
 }
+
+func TestClaudeBackfillPreviewAndConsent(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "projects", "test-project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const session = "7c0ffee0-0000-4000-8000-000000000002"
+	const fixture = `{"type":"assistant","timestamp":"2026-01-01T01:01:00.456Z","uuid":"4dd62612-d2a0-4816-bfb7-e4afa81f8aa3","sessionId":"` + session + `","entrypoint":"cli","isSidechain":false,"requestId":"req_test","message":{"id":"msg_test","model":"claude-haiku-5-5","stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":83,"cache_read_input_tokens":4,"cache_creation_input_tokens":1700},"content":[{"type":"text","text":"private transcript text"}]}}
+{"type":"cost-state","sessionId":"` + session + `","startTime":1767229200000,"totalCostUSD":0.0004415,"modelUsage":{"claude-haiku-5-5":{"inputTokens":2,"outputTokens":83,"cacheReadInputTokens":4,"cacheCreationInputTokens":1700}}}
+`
+	if err := os.WriteFile(filepath.Join(project, session+".jsonl"), []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	t.Setenv("TOKENMUNCHERS_URL", srv.URL+"/functions/v1/ingest")
+	t.Setenv("TOKENMUNCHERS_KEY", "tm_"+strings.Repeat("a", 43))
+	t.Setenv("CLAUDE_CONFIG_DIR", root)
+	cfgDir, stateDir := t.TempDir(), t.TempDir()
+	run := func(stdin string, extra ...string) (int, string, string) {
+		args := []string{"backfill", "--harness", "claude-code", "--config-dir", cfgDir, "--state-dir", stateDir}
+		return runApp(stdin, append(args, extra...)...)
+	}
+	code, out, stderr := run("")
+	if code != 0 || !strings.Contains(out, "Verified observed candidates: 1 records") ||
+		!strings.Contains(out, "no candidates are eligible to upload") ||
+		!strings.Contains(out, "input=2 output=83 cache_read=4 cache_write=1700 total=1789") ||
+		strings.Contains(out, "private transcript text") {
+		t.Fatalf("local preview: exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	if code, out, stderr := run("yes\n", "--upload", "--from", "2026-01-01T00:00:00Z"); code == 0 ||
+		!strings.Contains(stderr, "upload requires a valid, independently verified") {
+		t.Fatalf("incomplete window: exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(root, "missing"))
+	if code, out, stderr := run(""); code != 0 || !strings.Contains(out, "Verified observed candidates: 0 records") {
+		t.Fatalf("missing default home: exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	code, out, stderr = run("\n", "--claude-home", root, "--upload",
+		"--from", "2026-01-01T00:00:00Z", "--before", "2026-01-02T00:00:00Z")
+	if code != 0 || !strings.Contains(out, "Eligible:   1 records") || !strings.Contains(out, "Upload cancelled.") {
+		t.Fatalf("default-no upload: exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	if entries, err := os.ReadDir(stateDir); err != nil || len(entries) != 0 || requests.Load() != 0 {
+		t.Fatalf("unconfirmed runs wrote state or hit network: %v, %v, %d requests", entries, err, requests.Load())
+	}
+}
+
+func TestBackfillRejectsIncompatibleHomeFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--claude-home", "unused"},
+		{"--harness", "codex", "--claude-home="},
+		{"--harness", "claude-code", "--codex-home", "unused"},
+		{"--harness", "claude-code", "--codex-home=", "--claude-home", "unused"},
+	} {
+		if code, _, stderr := runApp("", append([]string{"backfill"}, args...)...); code == 0 || !strings.Contains(stderr, "incompatible") {
+			t.Errorf("backfill %v: exit %d, stderr %q", args, code, stderr)
+		}
+	}
+}

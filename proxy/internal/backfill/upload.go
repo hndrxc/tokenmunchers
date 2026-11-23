@@ -25,7 +25,8 @@ import (
 // Wire protocol constants mirroring supabase/functions/contributions/validation.ts
 // and the retained publish_contributions RPC.
 const (
-	harnessCodex = "codex"
+	HarnessClaude = "claude-code"
+	HarnessCodex  = "codex"
 
 	maxObservationsPerChunk = 500        // server MAX_OBSERVATIONS
 	maxChunkBytes           = 256 * 1024 // server MAX_BODY_BYTES
@@ -38,6 +39,8 @@ const (
 // Errors are generic by design: they never carry URLs, paths, API keys, IDs,
 // timestamps, or raw server bodies.
 var (
+	errUnsupportedHarness   = errors.New("unsupported backfill harness")
+	errInvalidClaudeID      = errors.New("Claude records require request and response IDs")
 	errNoAPIKey             = errors.New("API key not configured")
 	errInvalidURL           = errors.New("ingest URL rejected: must be absolute https pointing at /functions/v1/ingest (http only for numeric loopback)")
 	errDuplicateCanonicalID = errors.New("records contain duplicate canonical IDs")
@@ -62,7 +65,7 @@ var (
 //
 //   - records are sorted by canonical ID defensively and encoded once as
 //     observations with the typed allowlist the server requires (unknown cost
-//     as null, empty session/parent as null, harness fixed to "codex");
+//     as null, empty session/parent as null);
 //   - rows are partitioned into deterministic chunks bounded by <=500
 //     observations and the 256 KiB body budget (envelope reserved exactly);
 //   - the snapshot ID is a stable content hash of the window, the source
@@ -75,13 +78,16 @@ var (
 //     >58 chunks; a staging-limit 429 (no header) returns immediately; auth
 //     and protocol errors are never retried; network and server errors abort
 //     the run for an explicit rerun (no destructive cancel of staging);
-//   - a private per-root source state under stateDir stores a random device id
-//     and the immutable exact window, generated once race-safely.
+//   - a private source state per root and harness stores a random device ID and
+//     the immutable exact window under stateDir, generated once race-safely.
 //
 // It returns the server's accepted count (rows inserted in the original
 // commit, preserved on idempotent replay). Empty records neither mutate state
 // nor touch the network.
-func Upload(ctx context.Context, ingestURL, apiKey, stateDir, root string, window Window, records []Record) (int, error) {
+func Upload(ctx context.Context, harness, ingestURL, apiKey, stateDir, root string, window Window, records []Record) (int, error) {
+	if harness != HarnessCodex && harness != HarnessClaude {
+		return 0, errUnsupportedHarness
+	}
 	if len(records) == 0 {
 		return 0, nil
 	}
@@ -104,18 +110,21 @@ func Upload(ctx context.Context, ingestURL, apiKey, stateDir, root string, windo
 
 	rows := make([]json.RawMessage, len(sorted))
 	for i, r := range sorted {
-		rows[i], err = json.Marshal(encodeObservation(r))
+		if harness == HarnessClaude && (!validClaudeWireID(r.ID, "req_") || !validClaudeWireID(r.ResponseID, "msg_")) {
+			return 0, errInvalidClaudeID
+		}
+		rows[i], err = json.Marshal(encodeObservation(harness, r))
 		if err != nil {
 			return 0, errProtocol
 		}
 	}
 
-	state, err := loadOrCreateSource(stateDir, root, window)
+	state, err := loadOrCreateSource(stateDir, harness, root, window)
 	if err != nil {
 		return 0, err
 	}
 
-	chunks, err := splitRows(rows)
+	chunks, err := splitRows(harness, rows)
 	if err != nil {
 		return 0, err
 	}
@@ -126,7 +135,7 @@ func Upload(ctx context.Context, ingestURL, apiKey, stateDir, root string, windo
 	beginBody, err := json.Marshal(beginRequest{
 		Action:       "begin",
 		DeviceID:     state.DeviceID,
-		Harness:      harnessCodex,
+		Harness:      harness,
 		SnapshotID:   snapshotID,
 		BackfillFrom: wireTime(window.From),
 		Cutoff:       wireTime(window.Before),
@@ -144,7 +153,7 @@ func Upload(ctx context.Context, ingestURL, apiKey, stateDir, root string, windo
 	}
 
 	for i, rows := range chunks {
-		body, err := chunkBody(state.DeviceID, snapshotID, i, rows)
+		body, err := chunkBody(harness, state.DeviceID, snapshotID, i, rows)
 		if err != nil {
 			return 0, errProtocol
 		}
@@ -163,7 +172,7 @@ func Upload(ctx context.Context, ingestURL, apiKey, stateDir, root string, windo
 	commitBody, err := json.Marshal(commitRequest{
 		Action:     "commit",
 		DeviceID:   state.DeviceID,
-		Harness:    harnessCodex,
+		Harness:    harness,
 		SnapshotID: snapshotID,
 	})
 	if err != nil {
@@ -392,11 +401,12 @@ type commitRequest struct {
 	SnapshotID string `json:"snapshot_id"`
 }
 
-// wireObservation is the typed allowlist of one observation. Every field is
-// required by the server; unknown fields reject the whole chunk.
+// wireObservation is the typed allowlist of one observation. ResponseID is
+// only emitted for Claude backfill; unknown fields reject the whole chunk.
 type wireObservation struct {
 	Harness          string   `json:"harness"`
 	CanonicalID      string   `json:"canonical_id"`
+	ResponseID       string   `json:"response_id,omitempty"`
 	IdentityStrength string   `json:"identity_strength"`
 	Grain            string   `json:"grain"`
 	Timestamp        string   `json:"timestamp"`
@@ -428,17 +438,15 @@ func strPtr(s string) *string {
 	return &s
 }
 
-func encodeObservation(r Record) wireObservation {
-	return wireObservation{
-		Harness:          harnessCodex,
+func encodeObservation(harness string, r Record) wireObservation {
+	o := wireObservation{
+		Harness:          harness,
 		CanonicalID:      r.ID,
 		IdentityStrength: "response",
 		Grain:            "request",
 		Timestamp:        wireTime(r.Timestamp),
 		Provider:         r.Provider,
 		Model:            r.Model,
-		SessionID:        strPtr(r.SessionID),
-		ParentSessionID:  strPtr(r.ParentSessionID),
 		IsSubagent:       r.Subagent,
 		InputTokens:      r.Input,
 		OutputTokens:     r.Output,
@@ -449,6 +457,27 @@ func encodeObservation(r Record) wireObservation {
 		CostBasis:        "unknown",
 		Quality:          "observed",
 	}
+	if harness == HarnessClaude {
+		o.ResponseID = r.ResponseID
+		o.IdentityStrength = "request"
+	} else {
+		o.SessionID = strPtr(r.SessionID)
+		o.ParentSessionID = strPtr(r.ParentSessionID)
+	}
+	return o
+}
+
+func validClaudeWireID(id, prefix string) bool {
+	if len(id) <= len(prefix) || len(id) > 128 || !strings.HasPrefix(id, prefix) {
+		return false
+	}
+	for i := len(prefix); i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '/' && prefix == "req_") {
+			return false
+		}
+	}
+	return true
 }
 
 // splitRows partitions encoded observations into deterministic chunks bounded
@@ -456,8 +485,8 @@ func encodeObservation(r Record) wireObservation {
 // widest possible index and full-width UUIDs) is reserved up front and every
 // row adds its encoded length plus one comma, so a generated chunk body never
 // exceeds the budget. The partitioning depends only on the sorted row set.
-func splitRows(rows []json.RawMessage) ([][]json.RawMessage, error) {
-	base := chunkEnvelopeSize()
+func splitRows(harness string, rows []json.RawMessage) ([][]json.RawMessage, error) {
+	base := chunkEnvelopeSize(harness)
 	budget := maxChunkBytes - base
 	var groups [][]json.RawMessage
 	var cur []json.RawMessage
@@ -488,12 +517,12 @@ func splitRows(rows []json.RawMessage) ([][]json.RawMessage, error) {
 // empty observation array, the widest possible index, and the device and
 // snapshot UUIDs every real chunk carries. Every row adds len(row)+1 bytes on
 // top of this.
-func chunkEnvelopeSize() int {
+func chunkEnvelopeSize(harness string) int {
 	const uuidWidth = "00000000-0000-0000-0000-000000000000"
 	b, err := json.Marshal(chunkRequest{
 		Action:                 "chunk",
 		DeviceID:               uuidWidth,
-		Harness:                harnessCodex,
+		Harness:                harness,
 		SnapshotID:             uuidWidth,
 		Index:                  maxChunks - 1,
 		Observations:           []json.RawMessage{},
@@ -506,11 +535,11 @@ func chunkEnvelopeSize() int {
 	return len(b)
 }
 
-func chunkBody(deviceID, snapshotID string, index int, rows []json.RawMessage) ([]byte, error) {
+func chunkBody(harness, deviceID, snapshotID string, index int, rows []json.RawMessage) ([]byte, error) {
 	return json.Marshal(chunkRequest{
 		Action:                 "chunk",
 		DeviceID:               deviceID,
-		Harness:                harnessCodex,
+		Harness:                harness,
 		SnapshotID:             snapshotID,
 		Index:                  index,
 		Observations:           rows,
@@ -579,9 +608,13 @@ type windowState struct {
 
 const stateVersion = 1
 
-func statePath(stateDir, root string) string {
+func statePath(stateDir, harness, root string) string {
 	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(stateDir, "backfill-source-"+hex.EncodeToString(sum[:])+".json")
+	prefix := "backfill-source-"
+	if harness == HarnessClaude {
+		prefix += HarnessClaude + "-"
+	}
+	return filepath.Join(stateDir, prefix+hex.EncodeToString(sum[:])+".json")
 }
 
 func readState(path string) (windowState, error) {
@@ -596,13 +629,13 @@ func readState(path string) (windowState, error) {
 	return st, nil
 }
 
-// loadOrCreateSource loads the private per-root source state, creating it
+// loadOrCreateSource loads the private per-root, per-harness source state, creating it
 // with a fresh random device id and the exact window on first use. Creation is
 // race-safe (atomic link with exclusive semantics) so concurrent first uses
-// converge on one device id. The window is immutable per root; a different
+// converge on one device id. The window is immutable per source; a different
 // window is rejected before any network work.
-func loadOrCreateSource(stateDir, root string, window Window) (windowState, error) {
-	path := statePath(stateDir, root)
+func loadOrCreateSource(stateDir, harness, root string, window Window) (windowState, error) {
+	path := statePath(stateDir, harness, root)
 	from, before := wireTime(window.From), wireTime(window.Before)
 
 	if st, err := readState(path); err == nil {
