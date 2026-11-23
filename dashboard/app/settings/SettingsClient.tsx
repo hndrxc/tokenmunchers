@@ -103,27 +103,30 @@ export function SettingsClient({ profile, keys }: { profile: Profile; keys: ApiK
           <code>munch</code> is a small local program that reports Claude Code, Codex and other AI tools.
         </p>
         <ol style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 10 }}>
-          <li>
-            Build it (needs Go):
-            <pre>
-              git clone https://github.com/hndrxc/tokenmunchers{"\n"}
-              cd tokenmunchers/proxy{"\n"}
-              go build -o ~/.local/bin/munch ./cmd/munch
-            </pre>
-          </li>
           <li>Create an API key below. It is shown once.</li>
           <li>
-            Run <code>munch install</code>. It asks for the API key, starts the background service, sets up your shell, and offers
-            the OMP plugin when OMP is installed.
+            Run the installer for your operating system:
+            <div>Linux or macOS</div>
+            <pre>curl -fsSL https://tokenmunchers.taiisshort.com/install.sh | sh</pre>
+            <div>Windows PowerShell</div>
+            <pre>irm https://tokenmunchers.taiisshort.com/install.ps1 | iex</pre>
           </li>
           <li>
-            Open a new terminal. <code>munch status</code> shows queue and connection state; <code>munch pause</code> stops
-            reporting for private or client work.
+            On Linux or macOS, make sure the install directory is on your <code>PATH</code>, then run <code>munch install</code>.
+            The Windows installer runs this step automatically. When prompted, paste your API key.
+          </li>
+          <li>
+            Open a new terminal and run <code>munch status</code> to check setup. <code>munch pause</code> stops reporting for
+            private or client work.
           </li>
         </ol>
+        <p>
+          Munch can also report the Claude and Codex desktop apps (<code>munch desktop</code>), and <code>munch backfill</code>{" "}
+          imports earlier Codex usage.
+        </p>
         <p className="sub" style={{ marginBottom: 0 }}>
-          Only metadata is sent: provider, model, token counts, cost and timestamps. Prompts, responses and your provider
-          credentials go only to the provider. More in the{" "}
+          Only usage metadata is sent: model, token counts, cost and timestamps. Prompts, responses and provider credentials
+          never reach TokenMunchers. More in the{" "}
           <a href="https://github.com/hndrxc/tokenmunchers/blob/main/proxy/README.md" target="_blank" rel="noreferrer">
             munch README
           </a>

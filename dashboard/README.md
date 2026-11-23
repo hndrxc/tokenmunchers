@@ -14,6 +14,8 @@ The web front end for [tokenmunchers](../README.md), live at **[tokenmunchers.ta
 
 Signed-in users who aren't on the allowlist see a "not a member" page.
 
+The dashboard serves the Munch installers at `/install.sh` and `/install.ps1`. [`next.config.ts`](next.config.ts) rewrites them to `install-munch.sh` and `install-munch.ps1` on the repository's `main` branch, respectively.
+
 ## Data sources
 
 All reads run as the signed-in user, with row-level security (RLS) applied. The dashboard never writes usage data.
@@ -33,11 +35,13 @@ The leaderboard's period picker selects what each column shows and also drives e
 
 ## Claude Code and Codex
 
-[Munch](../proxy/README.md) reports supported proxy-routed calls through ingest. The opt-in desktop pilot reports eligible first-party local Claude Code and Codex requests through the existing contributions endpoint instead. Once committed, live exact requests appear in **Activity** and member recent calls with **Claude Code** or **Codex** badges. The badges identify the harness, not necessarily the desktop app. Contributions arrive on the next poll (roughly every 30 seconds) and don't create **Live now** presence; ingest updates still arrive over Realtime.
+[Munch](../proxy/README.md) reports supported proxy-routed calls through ingest. Opt-in desktop collection reports eligible local Claude Code sessions in Claude Desktop and local Codex desktop sessions through `/functions/v1/contributions`. Once committed, eligible live requests with exact counts appear in **Activity** and member recent calls with **Claude Code** or **Codex** badges. The badges identify the harness, not necessarily the desktop app. Contributions arrive on the next poll (roughly every 30 seconds) and don't create **Live now** presence; ingest updates still arrive over Realtime.
 
 **Activity** on the home page and **Recent calls** on member profiles share the same per-browser tag settings. **Claude Code** and **Codex** are shown by default; the **Standard** badge for ingest calls is hidden by default. Use the tag controls in either section to show, hide, or rename each source badge, or reset to the defaults. These settings affect only badge display, not which calls appear, subagent badges, or usage reporting.
 
 Activity reads the existing ledger and does not show historical, reconstructed, scoped-identity or superseded contributions. Both sources share the ingest feed's UTC retention horizon and are capped together at the newest 50 calls on the home page or newest 25 for a member. Previously published usage still contributes to totals where eligible, even after it ages out of Activity. Strong canonical IDs are owned once per user/harness across devices, and accepted contributions survive source cleanup. Source logs are not complete billing ledgers.
+
+Codex history imported with `munch backfill` also goes through the contributions endpoint. It counts toward eligible leaderboard totals but does not appear in **Activity** or **Recent calls**. Claude Code history import is not available.
 
 For mixed usage, the dashboard shows known spend alongside unpriced token coverage. When there is usage but none of it is priced, spend is **Unknown**, not $0; an actual reported zero remains zero. The dashboard labels estimates separately and indicates when the unpriced token count itself is unknown.
 
@@ -64,7 +68,7 @@ For sign-in to work locally, `http://localhost:3000/**` must be in the Supabase 
 
 ## Deploying
 
-Apply the [Supabase migrations](../supabase/README.md#deploying) before deploying this dashboard version. Apply [`20261122020000_known_token_attribution.sql`](../supabase/migrations/20261122020000_known_token_attribution.sql) after the Activity and known-spend migrations; it adds `known_subagent_tokens` and `known_main_tokens` to the leaderboard RPCs. [`20261122030000_default_main_attribution.sql`](../supabase/migrations/20261122030000_default_main_attribution.sql) then counts unclassified collector calls as main in totals, daily rows and Activity; this dashboard version expects that, because it no longer handles a null main/subagent flag. During rollout, an older snapshot can still show exact values but cannot supply missing known-count coverage, even after a Realtime update. This change does not include a production deployment.
+For a new environment, apply the [Supabase migrations](../supabase/README.md#deploying) before deploying the dashboard. The dashboard expects the known-token and default-main attribution migrations, which expose known main and subagent token counts and count unclassified collector calls as main. The [Codex backfill migration](../supabase/migrations/20261122040000_codex_backfill.sql) and updated `contributions` Edge Function are already deployed to production.
 
 The dashboard is a standard Next.js app. To deploy on Vercel:
 
