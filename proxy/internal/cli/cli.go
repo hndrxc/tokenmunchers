@@ -159,7 +159,7 @@ Commands:
                        omp gets the same variables its shell wrapper leaves out
   stats                Show local captured token totals (today, week, all)
   routes               List configured provider routes (capability redacted; --show-local-urls reveals it)
-  backfill             Preview or upload Codex or Claude Code history (--harness; uploads require --from/--before)
+  backfill             Preview or upload Codex or Claude Code history (--harness; uploads require --before)
   version              Print version info
 
 Run "munch <command> -h" for flags on any command.

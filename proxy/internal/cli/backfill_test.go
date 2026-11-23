@@ -14,6 +14,57 @@ import (
 	"github.com/tokenmunchers/tokenmunchers/proxy/internal/desktop"
 )
 
+const backfillTestEpoch = "1970-01-01T00:00:00.000Z"
+
+func TestParseVerifiedWindowCutoff(t *testing.T) {
+	epoch := time.Unix(0, 0).UTC()
+	midnight := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	now := midnight.Add(123*time.Millisecond + 456*time.Microsecond).In(time.FixedZone("local", -8*60*60))
+	for _, tt := range []struct {
+		name, before string
+		now, want    time.Time
+	}{
+		{"UTC date", "2026-01-02", now, midnight},
+		{"RFC3339 UTC", "2026-01-02T00:00:00.001+00:00", now, midnight.Add(time.Millisecond)},
+		{"now floors to a UTC millisecond", "now", now, midnight.Add(123 * time.Millisecond)},
+		{"now at a millisecond is still strictly past", "now", midnight, midnight.Add(-time.Millisecond)},
+		{"date equal to invocation time", "2026-01-02", midnight, time.Time{}},
+		{"future date", "2026-01-03", now, time.Time{}},
+		{"future RFC3339", "2026-01-02T00:00:00.124Z", now, time.Time{}},
+		{"cutoff equal to epoch", "1970-01-01", now, time.Time{}},
+		{"now is case-sensitive", "Now", now, time.Time{}},
+		{"now cannot have surrounding spaces", " now ", now, time.Time{}},
+		{"invalid calendar date", "2026-02-30", now, time.Time{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			window, ok := parseVerifiedWindow("", tt.before, tt.now)
+			if tt.want.IsZero() {
+				if ok {
+					t.Fatalf("unexpected verified window: %+v", window)
+				}
+				return
+			}
+			if !ok || !window.From.Equal(epoch) || !window.Before.Equal(tt.want) || !window.Before.Before(tt.now) {
+				t.Fatalf("parseVerifiedWindow with omitted start and cutoff %q at %v = %+v, %t; want [%v, %v)", tt.before, tt.now, window, ok, epoch, tt.want)
+			}
+		})
+	}
+}
+
+func backfillPreviewCutoff(t *testing.T, out string) string {
+	t.Helper()
+	const prefix = "  Window:     " + backfillTestEpoch + " (inclusive) to "
+	for _, line := range strings.Split(out, "\n") {
+		if cutoff, ok := strings.CutPrefix(line, prefix); ok {
+			if cutoff, ok := strings.CutSuffix(cutoff, " (exclusive)"); ok {
+				return cutoff
+			}
+		}
+	}
+	t.Fatalf("missing verified epoch-start window in %q", out)
+	return ""
+}
+
 func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, "sessions")
@@ -39,6 +90,8 @@ func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 		var req struct {
 			Action       string `json:"action"`
 			SnapshotID   string `json:"snapshot_id"`
+			BackfillFrom string `json:"backfill_from"`
+			Cutoff       string `json:"cutoff"`
 			Observations []struct {
 				CanonicalID string `json:"canonical_id"`
 			} `json:"observations"`
@@ -49,6 +102,9 @@ func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 			return
 		}
 		ack := map[string]any{"ok": true, "action": req.Action, "snapshot_id": req.SnapshotID}
+		if req.Action == "begin" && (req.BackfillFrom != backfillTestEpoch || req.Cutoff != "2026-01-02T00:00:00.000Z") {
+			t.Errorf("staged window: [%q, %q); want epoch through exclusive UTC midnight", req.BackfillFrom, req.Cutoff)
+		}
 		if req.Action == "chunk" && (len(req.Observations) != 1 || req.Observations[0].CanonicalID != "resp_test") {
 			t.Error("confirmed chunk did not contain the observed response")
 		}
@@ -76,25 +132,31 @@ func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Eligible:   2 records") || !strings.Contains(out, "desktop_collected: 1") {
 		t.Fatalf("local preview: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
+	dateWindow := []string{"--before", "2026-01-02"}
+	if code, out, stderr := run("", dateWindow...); code != 0 || !strings.Contains(out, "Eligible:   2 records") ||
+		backfillPreviewCutoff(t, out) != "2026-01-02T00:00:00.000Z" {
+		t.Fatalf("date-only preview: exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
 	if code, out, stderr := run(""); code != 0 ||
 		!strings.Contains(out, "Window: all retained history") || !strings.Contains(out, "Candidates: 2 records") ||
-		!strings.Contains(out, "Upload requires explicit pre-proxy --from and --before") ||
+		!strings.Contains(out, "Upload requires an explicit pre-proxy --before") ||
 		!strings.Contains(out, "desktop_collected: 1") || !strings.Contains(out, "total=123") ||
 		strings.Contains(out, "Eligible:") {
 		t.Fatalf("preview without a window: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
 	future := time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339)
 	if code, out, stderr := run("yes\n", "--upload"); code == 0 || out != "" ||
-		!strings.Contains(stderr, "explicit --from and --before") {
+		!strings.Contains(stderr, "upload requires a valid, independently verified") || !strings.Contains(stderr, "--before") {
 		t.Fatalf("upload without a window: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
 	for _, bounds := range [][]string{
 		{"--from", window[1]},
-		{"--before", window[3]},
+		{"--from=", "--before", window[3]},
 		{"--from="},
 		{"--before="},
 		{"--from=", "--before="},
 		{"--from", "not-a-date", "--before", window[3]},
+		{"--from", "2026-01-01", "--before", window[3]},
 		{"--from", window[1], "--before", future},
 		{"--from", "2026-01-01T00:00:00.1234Z", "--before", window[3]},
 		{"--from", "2026-01-01T00:00:00.1230Z", "--before", window[3]},
@@ -102,7 +164,7 @@ func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 		{"--from", window[3], "--before", window[1]},
 	} {
 		if code, out, stderr := run("", bounds...); code == 0 || out != "" ||
-			!strings.Contains(stderr, "supply both --from and --before") {
+			!strings.Contains(stderr, "--before") {
 			t.Errorf("preview with window %v: exit %d, stdout %q, stderr %q", bounds, code, out, stderr)
 		}
 		if code, out, stderr := run("yes\n", append([]string{"--upload"}, bounds...)...); code == 0 || out != "" ||
@@ -111,7 +173,7 @@ func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 		}
 	}
 	for _, stdin := range []string{"", "\n", "no\n"} {
-		if code, out, stderr := run(stdin, append([]string{"--upload"}, window...)...); code != 0 || !strings.Contains(out, "Upload cancelled.") {
+		if code, out, stderr := run(stdin, append([]string{"--upload"}, dateWindow...)...); code != 0 || !strings.Contains(out, "Upload cancelled.") {
 			t.Fatalf("declined upload: exit %d, stdout %q, stderr %q", code, out, stderr)
 		}
 	}
@@ -139,7 +201,7 @@ func TestBackfillRequiresVerifiedWindowAndConsent(t *testing.T) {
 		!strings.Contains(out, "total=120") || requests.Load() != 0 {
 		t.Fatalf("desktop-aware preview: exit %d, stdout %q, stderr %q, %d requests", code, out, stderr, requests.Load())
 	}
-	code, out, stderr = run("yes\n", append([]string{"--upload"}, window...)...)
+	code, out, stderr = run("yes\n", append([]string{"--upload"}, dateWindow...)...)
 	if code != 0 || requests.Load() != 3 || !strings.Contains(out, "1 of 1 records accepted") {
 		t.Fatalf("confirmed upload: exit %d, %d requests, stdout %q, stderr %q", code, requests.Load(), out, stderr)
 	}
@@ -197,8 +259,8 @@ func TestClaudeBackfillPreviewAndConsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	const session = "7c0ffee0-0000-4000-8000-000000000002"
-	const fixture = `{"type":"assistant","timestamp":"2026-01-01T01:01:00.456Z","uuid":"4dd62612-d2a0-4816-bfb7-e4afa81f8aa3","sessionId":"` + session + `","entrypoint":"cli","isSidechain":false,"requestId":"req_test","message":{"id":"msg_test","model":"claude-haiku-5-5","stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":83,"cache_read_input_tokens":4,"cache_creation_input_tokens":1700},"content":[{"type":"text","text":"private transcript text"}]}}
-{"type":"cost-state","sessionId":"` + session + `","startTime":1767229200000,"totalCostUSD":0.0004415,"modelUsage":{"claude-haiku-5-5":{"inputTokens":2,"outputTokens":83,"cacheReadInputTokens":4,"cacheCreationInputTokens":1700}}}
+	const fixture = `{"type":"assistant","timestamp":"2026-01-01T00:00:00.000Z","uuid":"4dd62612-d2a0-4816-bfb7-e4afa81f8aa3","sessionId":"` + session + `","entrypoint":"cli","isSidechain":false,"requestId":"req_test","message":{"id":"msg_test","model":"claude-haiku-5-5","stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":83,"cache_read_input_tokens":4,"cache_creation_input_tokens":1700},"content":[{"type":"text","text":"private transcript text"}]}}
+{"type":"cost-state","sessionId":"` + session + `","startTime":1767225600000,"totalCostUSD":0.0004415,"modelUsage":{"claude-haiku-5-5":{"inputTokens":2,"outputTokens":83,"cacheReadInputTokens":4,"cacheCreationInputTokens":1700}}}
 `
 	if err := os.WriteFile(filepath.Join(project, session+".jsonl"), []byte(fixture), 0o600); err != nil {
 		t.Fatal(err)
@@ -219,7 +281,7 @@ func TestClaudeBackfillPreviewAndConsent(t *testing.T) {
 	}
 	code, out, stderr := run("")
 	if code != 0 || !strings.Contains(out, "Window: all retained history") || !strings.Contains(out, "Candidates: 1 records") ||
-		!strings.Contains(out, "Upload requires explicit pre-proxy --from and --before") ||
+		!strings.Contains(out, "Upload requires an explicit pre-proxy --before") ||
 		!strings.Contains(out, "input=2 output=83 cache_read=4 cache_write=1700 total=1789") ||
 		strings.Contains(out, "Eligible:") || strings.Contains(out, "private transcript text") {
 		t.Fatalf("local preview: exit %d, stdout %q, stderr %q", code, out, stderr)
@@ -227,6 +289,26 @@ func TestClaudeBackfillPreviewAndConsent(t *testing.T) {
 	if code, out, stderr := run("yes\n", "--upload", "--from", "2026-01-01T00:00:00Z"); code == 0 ||
 		!strings.Contains(stderr, "upload requires a valid, independently verified") {
 		t.Fatalf("incomplete window: exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	for _, before := range []string{"2026-01-01", "2026-01-01T00:00:00Z"} {
+		if code, out, stderr := run("", "--before", before); code != 0 || !strings.Contains(out, "Eligible:   0 records") ||
+			backfillPreviewCutoff(t, out) != "2026-01-01T00:00:00.000Z" {
+			t.Fatalf("exclusive UTC midnight cutoff %q: exit %d, stdout %q, stderr %q", before, code, out, stderr)
+		}
+	}
+	started := time.Now()
+	code, out, stderr = run("\n", "--upload", "--before", "now")
+	if code != 0 || !strings.Contains(out, "Eligible:   1 records") || !strings.Contains(out, "Upload cancelled.") {
+		t.Fatalf("default-no now upload: exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	resolved := backfillPreviewCutoff(t, out)
+	cutoff, err := time.Parse("2006-01-02T15:04:05.000Z", resolved)
+	if err != nil || cutoff.Before(started.Add(-time.Millisecond)) || !cutoff.Before(time.Now()) {
+		t.Fatalf("resolved now cutoff %q is not an invocation-time UTC millisecond: %v", resolved, err)
+	}
+	if code, fixed, stderr := run("", "--before", resolved); code != 0 || !strings.Contains(fixed, "Eligible:   1 records") ||
+		backfillPreviewCutoff(t, fixed) != resolved {
+		t.Fatalf("resolved now cutoff replay: exit %d, stdout %q, stderr %q", code, fixed, stderr)
 	}
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(root, "missing"))
 	if code, out, stderr := run(""); code != 0 || !strings.Contains(out, "Candidates: 0 records") {

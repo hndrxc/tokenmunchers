@@ -22,15 +22,22 @@ const backfillUsage = `Usage: munch backfill [flags]
 
 Preview retained Codex rollouts or local Claude Code history (CLI and Claude
 Desktop Code). With no window flags, preview all retained history locally.
-To limit the preview, supply both --from and --before in RFC3339 UTC (at
-most millisecond precision, both in the past, from < before). Upload requires
-explicit pre-proxy --from and --before bounds. Independently verify that the
+Supply --before to limit the preview: use YYYY-MM-DD (midnight UTC),
+RFC3339 UTC (up to millisecond precision), or now. The cutoff is exclusive
+and must be in the past; now resolves once to a strictly past UTC millisecond.
+--from is inclusive and must be RFC3339 UTC (up to millisecond precision),
+at or after the Unix epoch and earlier than --before. If omitted, it
+defaults to 1970-01-01T00:00:00.000Z when --before is supplied.
+
+Upload requires an explicit --before and independent verification that the
 entire interval predates Munch proxy use for the selected source, all included
-archives, and every included route. Upload requires interactive confirmation
-that defaults to no; there is no --yes bypass.
+archives, and every included route. Use now only if verified through the
+resolved cutoff; use the printed absolute cutoff for any retry. Upload
+requires interactive confirmation that defaults to no; there is no --yes bypass.
 `
 
 func (a *App) cmdBackfill(args []string) error {
+	now := time.Now()
 	fs := flag.NewFlagSet("backfill", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
 	fs.Usage = func() {
@@ -41,8 +48,8 @@ func (a *App) cmdBackfill(args []string) error {
 	harness := fs.String("harness", backfill.HarnessCodex, "history source: codex or claude-code")
 	codexHome := fs.String("codex-home", "", "override Codex home directory (default: $CODEX_HOME or ~/.codex)")
 	claudeHome := fs.String("claude-home", "", "override Claude home directory (default: $CLAUDE_CONFIG_DIR or ~/.claude)")
-	fromStr := fs.String("from", "", "verified interval start, inclusive, RFC3339 UTC")
-	beforeStr := fs.String("before", "", "verified interval end, exclusive, RFC3339 UTC")
+	fromStr := fs.String("from", "", "inclusive start: RFC3339 UTC (defaults to Unix epoch with --before)")
+	beforeStr := fs.String("before", "", "exclusive cutoff: YYYY-MM-DD (midnight UTC), RFC3339 UTC, or now")
 	upload := fs.Bool("upload", false, "upload after interactive confirmation")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -63,23 +70,27 @@ func (a *App) cmdBackfill(args []string) error {
 	default:
 		return fmt.Errorf("unknown --harness %q; choose codex or claude-code", *harness)
 	}
-	var incompatible, boundsSpecified bool
+	var incompatible, fromSpecified, beforeSpecified bool
 	fs.Visit(func(f *flag.Flag) {
 		incompatible = incompatible || f.Name == wrongHome
-		boundsSpecified = boundsSpecified || f.Name == "from" || f.Name == "before"
+		fromSpecified = fromSpecified || f.Name == "from"
+		beforeSpecified = beforeSpecified || f.Name == "before"
 	})
 	if incompatible {
 		return fmt.Errorf("--%s is incompatible with --harness %s", wrongHome, *harness)
 	}
 	var window backfill.Window
-	if boundsSpecified || *upload {
+	if fromSpecified || beforeSpecified || *upload {
 		var valid bool
-		window, valid = parseVerifiedWindow(*fromStr, *beforeStr)
+		if beforeSpecified && (!fromSpecified || strings.TrimSpace(*fromStr) != "") {
+			window, valid = parseVerifiedWindow(*fromStr, *beforeStr, now)
+		}
 		if !valid {
+			const hint = "supply --before as a past YYYY-MM-DD (midnight UTC), RFC3339 UTC (up to millisecond precision), or now; if supplied, --from must be RFC3339 UTC (up to millisecond precision), at or after the Unix epoch and earlier than --before"
 			if *upload {
-				return errors.New("upload requires a valid, independently verified pre-proxy window with explicit --from and --before bounds")
+				return errors.New("upload requires a valid, independently verified pre-proxy window: " + hint)
 			}
-			return errors.New("supply both --from and --before in RFC3339 UTC (at most millisecond precision, both in the past, from < before)")
+			return errors.New(hint)
 		}
 	}
 
@@ -127,6 +138,10 @@ func (a *App) cmdBackfill(args []string) error {
 		return nil
 	}
 
+	if *beforeStr == "now" {
+		fmt.Fprintf(a.Stdout, "Use --before now only if you verified the history was pre-proxy through %s.\n", utcStamp(window.Before))
+		fmt.Fprintf(a.Stdout, "On retry, reuse --before %s instead of now.\n", utcStamp(window.Before))
+	}
 	p := newPrompter(a.Stdin, a.Stdout, false)
 	ok, err := p.askConfirmation(fmt.Sprintf("Confirm you independently verified this entire window was pre-proxy for this source, all included archives and routes, and upload %d records?", eligible), false)
 	if err != nil {
@@ -190,20 +205,36 @@ func resolveBackfillRoot(harness, dir string) (string, error) {
 	return resolved, nil
 }
 
-// parseVerifiedWindow parses --from and --before into the verified scan
-// interval. Both must be RFC3339 with an explicit UTC offset ('Z' or
-// '+00:00'), at most millisecond precision, strictly in the past, with
-// from < before. On any failure it reports no verified window.
-func parseVerifiedWindow(from, before string) (backfill.Window, bool) {
-	if strings.TrimSpace(from) == "" || strings.TrimSpace(before) == "" {
-		return backfill.Window{}, false
+// parseVerifiedWindow defaults an omitted start to the Unix epoch and
+// resolves the exclusive cutoff against the invocation time.
+func parseVerifiedWindow(from, before string, now time.Time) (backfill.Window, bool) {
+	f := time.Unix(0, 0).UTC()
+	if from != "" {
+		var ok bool
+		f, ok = parseUTCRFC3339(from)
+		if !ok {
+			return backfill.Window{}, false
+		}
 	}
-	f, okF := parseUTCRFC3339(from)
-	b, okB := parseUTCRFC3339(before)
-	if !okF || !okB {
-		return backfill.Window{}, false
+
+	var b time.Time
+	switch {
+	case before == "now":
+		// If now is already on a millisecond boundary, choose the preceding one.
+		b = now.Add(-time.Nanosecond).Truncate(time.Millisecond).UTC()
+	case len(before) == len(time.DateOnly):
+		var err error
+		b, err = time.Parse(time.DateOnly, before)
+		if err != nil {
+			return backfill.Window{}, false
+		}
+	default:
+		var ok bool
+		b, ok = parseUTCRFC3339(before)
+		if !ok {
+			return backfill.Window{}, false
+		}
 	}
-	now := time.Now()
 	if f.Unix() < 0 || !b.Before(now) || !f.Before(b) {
 		return backfill.Window{}, false
 	}
@@ -258,7 +289,7 @@ func (a *App) printBackfillPreview(harness, root string, window backfill.Window,
 	} else {
 		fmt.Fprintln(a.Stdout, "  Window: all retained history")
 		fmt.Fprintf(a.Stdout, "  Candidates: %d records\n", len(preview.Records))
-		fmt.Fprintln(a.Stdout, "  Upload requires explicit pre-proxy --from and --before bounds.")
+		fmt.Fprintln(a.Stdout, "  Upload requires an explicit pre-proxy --before; --from defaults to the Unix epoch.")
 	}
 	var min, max time.Time
 	var input, output, cacheRead, cacheWrite int64
