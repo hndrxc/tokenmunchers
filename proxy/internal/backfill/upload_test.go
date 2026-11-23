@@ -173,7 +173,7 @@ func TestUploadInterruptedResumeReplaysExactStage(t *testing.T) {
 		attempt++
 		perAttempt = append(perAttempt, nil)
 		mu.Unlock()
-		return Upload(context.Background(), f.url(), "k", stateDir, "/r", uploadWindow, recs)
+		return Upload(context.Background(), HarnessCodex, f.url(), "k", stateDir, "/r", uploadWindow, recs)
 	}
 
 	if _, err := run(); !errors.Is(err, errServer) {
@@ -243,7 +243,7 @@ func TestUploadAckMismatchRejected(t *testing.T) {
 			ack(w, 200, `{"ok":true,"action":"commit","snapshot_id":"%s","accepted":60,"committed":true}`, req.SnapshotID)
 		}
 	})
-	_, err := Upload(context.Background(), f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(60))
+	_, err := Upload(context.Background(), HarnessCodex, f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(60))
 	if !errors.Is(err, errAck) {
 		t.Fatalf("err = %v, want errAck", err)
 	}
@@ -270,7 +270,7 @@ func TestUploadCommitAcceptedOutOfBounds(t *testing.T) {
 			ack(w, 200, `{"ok":true,"action":"commit","snapshot_id":"%s","accepted":999999,"committed":true}`, req.SnapshotID)
 		}
 	})
-	_, err := Upload(context.Background(), f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(60))
+	_, err := Upload(context.Background(), HarnessCodex, f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(60))
 	if !errors.Is(err, errAck) {
 		t.Fatalf("err = %v, want errAck", err)
 	}
@@ -305,7 +305,7 @@ func TestChunkBoundaryPackingWithLargeIdentifiers(t *testing.T) {
 			ack(w, 200, `{"ok":true,"action":"commit","snapshot_id":"%s","accepted":2000,"committed":true}`, req.SnapshotID)
 		}
 	})
-	accepted, err := Upload(context.Background(), f.url(), "k", newStateDir(t), "/r", uploadWindow, recs)
+	accepted, err := Upload(context.Background(), HarnessCodex, f.url(), "k", newStateDir(t), "/r", uploadWindow, recs)
 	if err != nil || accepted != 2000 {
 		t.Fatalf("Upload: accepted=%d err=%v", accepted, err)
 	}
@@ -357,7 +357,7 @@ func TestChunkBodiesFitServerLimitWithRealisticRows(t *testing.T) {
 				ack(w, 200, `{"ok":true,"action":"commit","snapshot_id":"%s","accepted":1200,"committed":true}`, req.SnapshotID)
 			}
 		})
-		if accepted, err := Upload(context.Background(), f.url(), "k", newStateDir(t), "/r", uploadWindow, recs); err != nil || accepted != 1200 {
+		if accepted, err := Upload(context.Background(), HarnessCodex, f.url(), "k", newStateDir(t), "/r", uploadWindow, recs); err != nil || accepted != 1200 {
 			t.Fatalf("id length %d: accepted=%d err=%v", idLen, accepted, err)
 		}
 		if largest <= maxChunkBytes-1024 {
@@ -373,7 +373,7 @@ func TestUploadNoRedirects(t *testing.T) {
 		w.Header().Set("Location", "/elsewhere")
 		w.WriteHeader(http.StatusFound)
 	})
-	_, err := Upload(context.Background(), f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(60))
+	_, err := Upload(context.Background(), HarnessCodex, f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(60))
 	if err == nil {
 		t.Fatal("Upload silently accepted a redirect")
 	}
@@ -407,7 +407,7 @@ func TestUploadRateLimitRetriesWithRetryAfter(t *testing.T) {
 			ack(w, 200, `{"ok":true,"action":"commit","snapshot_id":"%s","accepted":1200,"committed":true}`, req.SnapshotID)
 		}
 	})
-	accepted, err := Upload(context.Background(), f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(1200))
+	accepted, err := Upload(context.Background(), HarnessCodex, f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(1200))
 	if err != nil || accepted != 1200 {
 		t.Fatalf("Upload: accepted=%d err=%v", accepted, err)
 	}
@@ -434,7 +434,7 @@ func TestUploadStagingLimitReturnsImmediately(t *testing.T) {
 	f := newFakeContrib(t, func(w http.ResponseWriter, body []byte) {
 		ack(w, 429, `{"error":"staging_limit"}`)
 	})
-	_, err := Upload(context.Background(), f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(60))
+	_, err := Upload(context.Background(), HarnessCodex, f.url(), "k", newStateDir(t), "/r", uploadWindow, testRecords(60))
 	if !errors.Is(err, errRateLimited) {
 		t.Fatalf("err = %v, want errRateLimited", err)
 	}
@@ -446,12 +446,14 @@ func TestUploadStagingLimitReturnsImmediately(t *testing.T) {
 // TestUploadEmptyRecordsNoMutationNoNetwork: the empty contract touches
 // neither the network nor the state directory.
 func TestUploadEmptyRecordsNoMutationNoNetwork(t *testing.T) {
-	f := newFakeContrib(t, func(w http.ResponseWriter, body []byte) { t.Fatal("unexpected request") })
+	f := newFakeContrib(t, func(w http.ResponseWriter, body []byte) { t.Error("unexpected request") })
 	stateDir := filepath.Join(t.TempDir(), "missing", "state")
-	for _, recs := range [][]Record{nil, {}} {
-		accepted, err := Upload(context.Background(), f.url(), "k", stateDir, "/r", uploadWindow, recs)
-		if err != nil || accepted != 0 {
-			t.Fatalf("empty Upload: accepted=%d err=%v", accepted, err)
+	for _, harness := range []string{HarnessCodex, HarnessClaude} {
+		for _, recs := range [][]Record{nil, {}} {
+			accepted, err := Upload(context.Background(), harness, f.url(), "k", stateDir, "/r", uploadWindow, recs)
+			if err != nil || accepted != 0 {
+				t.Fatalf("empty %s Upload: accepted=%d err=%v", harness, accepted, err)
+			}
 		}
 	}
 	if f.requestCount() != 0 {
@@ -459,5 +461,132 @@ func TestUploadEmptyRecordsNoMutationNoNetwork(t *testing.T) {
 	}
 	if _, err := os.Stat(stateDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state dir was created for empty records")
+	}
+}
+
+func TestUploadClaudeWireAndIndependentSource(t *testing.T) {
+	f := newFakeContrib(t, func(w http.ResponseWriter, body []byte) {
+		var req beginRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		ack(w, 200, `{"ok":true,"action":%q,"snapshot_id":%q,"accepted":1,"committed":true}`, req.Action, req.SnapshotID)
+	})
+	stateDir := newStateDir(t)
+	const root = "/same-root"
+	const legacyDevice = "85e74e52-7bbc-4d37-94d4-da29c46d4dead"
+	// Seed the original Codex source filename independently of statePath.
+	const legacyName = "backfill-source-a419e12329a2ccf5cf9a19456f9b345e2d4e38ddaabcb442612ce198a83fc435.json"
+	legacy := fmt.Sprintf(`{"version":1,"device_id":%q,"from":%q,"before":%q}`,
+		legacyDevice, wireTime(uploadWindow.From), wireTime(uploadWindow.Before))
+	if err := os.WriteFile(filepath.Join(stateDir, legacyName), []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	codex := testRecord("resp_raw")
+	codex.ResponseID = "msg_must_not_publish_for_codex"
+	claude := testRecord("req_original")
+	claude.ResponseID = "msg_original"
+	claude.Provider, claude.Model = "unknown", "claude-sonnet-4"
+	claude.ParentSessionID = "sensitive_parent"
+	yes := true
+	claude.Subagent = &yes
+	claudeWindow := Window{From: uploadWindow.From.Add(time.Hour), Before: uploadWindow.Before}
+	for _, run := range []struct {
+		harness string
+		window  Window
+		record  Record
+	}{
+		{HarnessCodex, uploadWindow, codex},
+		{HarnessClaude, claudeWindow, claude},
+		{HarnessClaude, claudeWindow, claude},
+	} {
+		got, err := Upload(context.Background(), run.harness, f.url(), "k", stateDir, root, run.window, []Record{run.record})
+		if err != nil || got != 1 {
+			t.Fatalf("upload %s: accepted=%d err=%v", run.harness, got, err)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.bodies) != 9 {
+		t.Fatalf("sent %d requests, want 9", len(f.bodies))
+	}
+	var codexBegin, claudeBegin beginRequest
+	if err := json.Unmarshal(f.bodies[0], &codexBegin); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(f.bodies[3], &claudeBegin); err != nil {
+		t.Fatal(err)
+	}
+	if codexBegin.DeviceID != legacyDevice {
+		t.Fatal("Codex no longer reuses its original persisted source")
+	}
+	if codexBegin.Harness != HarnessCodex || claudeBegin.Harness != HarnessClaude ||
+		claudeBegin.DeviceID == codexBegin.DeviceID || claudeBegin.SnapshotID == codexBegin.SnapshotID ||
+		claudeBegin.BackfillFrom != wireTime(claudeWindow.From) || claudeBegin.Cutoff != wireTime(claudeWindow.Before) {
+		t.Fatal("Claude source must have its own identity and window")
+	}
+	for i := range 3 {
+		if !bytes.Equal(f.bodies[3+i], f.bodies[6+i]) {
+			t.Fatalf("Claude replay changed request %d", i)
+		}
+	}
+	for i := 3; i < 6; i++ {
+		var req beginRequest
+		if err := json.Unmarshal(f.bodies[i], &req); err != nil {
+			t.Fatal(err)
+		}
+		if req.Harness != HarnessClaude || req.DeviceID != claudeBegin.DeviceID || req.SnapshotID != claudeBegin.SnapshotID {
+			t.Fatalf("inconsistent Claude envelope at request %d", i)
+		}
+	}
+	if bytes.Contains(f.bodies[1], []byte(`"response_id"`)) {
+		t.Fatal("Codex wire unexpectedly contains response_id")
+	}
+	var chunk struct {
+		Observations []map[string]json.RawMessage `json:"observations"`
+	}
+	if err := json.Unmarshal(f.bodies[4], &chunk); err != nil || len(chunk.Observations) != 1 {
+		t.Fatalf("invalid Claude chunk: %v", err)
+	}
+	want := map[string]string{
+		"harness": `"claude-code"`, "canonical_id": `"req_original"`, "response_id": `"msg_original"`,
+		"identity_strength": `"request"`, "grain": `"request"`, "timestamp": `"2026-01-15T10:30:00.000Z"`,
+		"interval_start": "null", "interval_end": "null", "provider": `"unknown"`, "model": `"claude-sonnet-4"`,
+		"session_id": "null", "parent_session_id": "null", "is_subagent": "true",
+		"input_tokens": "1000", "output_tokens": "200", "cache_read_tokens": "300", "cache_write_tokens": "50",
+		"call_count": "1", "cost_usd": "null", "cost_basis": `"unknown"`, "quality": `"observed"`,
+	}
+	row := chunk.Observations[0]
+	if len(row) != len(want) {
+		t.Fatalf("Claude wire field count = %d, want %d", len(row), len(want))
+	}
+	for field, value := range want {
+		if got := string(row[field]); got != value {
+			t.Errorf("%s = %s, want %s", field, got, value)
+		}
+	}
+}
+
+func TestUploadRejectsInvalidHarnessAndClaudeIdentities(t *testing.T) {
+	f := newFakeContrib(t, func(w http.ResponseWriter, body []byte) { t.Error("unexpected request") })
+	stateDir := filepath.Join(t.TempDir(), "missing")
+	for _, tc := range []struct {
+		harness string
+		record  Record
+		wantErr error
+	}{
+		{"unsupported", testRecord("req_ok"), errUnsupportedHarness},
+		{HarnessClaude, testRecord("req_without_message"), errInvalidClaudeID},
+		{HarnessClaude, Record{ID: "req_ok", ResponseID: "msg_/unsafe"}, errInvalidClaudeID},
+		{HarnessClaude, Record{ID: "resp_wrong_harness", ResponseID: "msg_ok"}, errInvalidClaudeID},
+	} {
+		if _, err := Upload(context.Background(), tc.harness, f.url(), "k", stateDir, "/r", uploadWindow, []Record{tc.record}); !errors.Is(err, tc.wantErr) {
+			t.Fatalf("upload %s: got %v, want %v", tc.harness, err, tc.wantErr)
+		}
+	}
+	if _, err := os.Stat(stateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid data touched state: %v", err)
 	}
 }

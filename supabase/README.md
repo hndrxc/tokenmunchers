@@ -38,7 +38,7 @@ Deleting an account cascades to every row the user owns.
 
 `ingest` rejects events older than 7 days, so a late event (from a retry queue) always lands on a UTC day between today−7 and today. Every 10 minutes, the `tokenmunchers-rollup` job recomputes the daily totals for exactly those days. Raw rows are kept until the start of today−8, so a recomputed day always still has all its raw rows. A recompute therefore never replaces a correct daily total with a partial one.
 
-The OMP plugin avoids overlap by uploading history only for calls made before that machine's first live event. Codex backfill uses the contributions ledger instead and requires an independently verified pre-proxy window.
+The OMP plugin avoids overlap by uploading history only for calls made before that machine's first live event. Codex and Claude backfill use the contributions ledger instead and require an independently verified pre-proxy window.
 
 ### Read access
 
@@ -50,6 +50,7 @@ The Discord bot operates under a dedicated, read-only role (`tokenmunchers_disco
 | Function | Callable by | Description |
 | --- | --- | --- |
 | `leaderboard_since(timestamptz)` | Members | OMP raw events (up to 7 days back) plus collector contributions since the original timestamp |
+| `leaderboard(p_days int default 7)` | Members | `leaderboard_since(now() − p_days)`, with `p_days` clamped to 1–7 |
 | `leaderboard_all_time()` | Members | OMP history, past daily rollups and today's raw events, plus published collector contributions once |
 | `recent_activity(p_user_id uuid default null)` | Members | Newest 50 calls across members or newest 25 for the specified member, combining ingest events and committed live exact Claude Code/Codex requests labeled by source |
 | `create_api_key(label)` | Members | Creates a key and returns its plaintext once |
@@ -97,7 +98,7 @@ A row has `day`, `provider`, `model`, `is_subagent`, `call_count`, the four toke
 
 ### `POST /functions/v1/contributions`
 
-The [Munch desktop collector](../proxy/README.md#desktop-accounting-pilot) posts eligible local Claude Code and Codex requests here. [`munch backfill`](../proxy/README.md#codex-history-backfill) uses the same endpoint in append-only Codex mode. Backfilled records count in leaderboard totals but do not appear in Activity. The retired native collectors' accepted usage remains in the ledger. Proxy-routed calls use `ingest`; the OMP plugin uses `ingest` and `history`.
+The [Munch desktop collector](../proxy/README.md#desktop-accounting-pilot) posts eligible local Claude Code and Codex requests here. `munch backfill` uses the same endpoint in append-only mode for [Codex](../proxy/README.md#codex-history-backfill) and [Claude Code](../proxy/README.md#claude-code-history-backfill). Backfilled records count in leaderboard totals but do not appear in Activity. The retired native collectors' accepted usage remains in the ledger. Proxy-routed calls use `ingest`; the OMP plugin uses `ingest` and `history`.
 
 `recent_activity` reads committed contributions directly without a second ledger. It excludes historical, reconstructed, scoped-identity and superseded rows, and explicitly applies the UTC cutoff (start of UTC day today−8) only to collector activity, without expiring contributions from the ledger. Ingest activity relies on the existing `usage_events` retention policy. The dashboard polls it roughly every 30 seconds; the collector table isn't published through Realtime and contributions don't create **Live now** presence. Ingest activity still streams over Realtime.
 
@@ -117,7 +118,9 @@ Each request includes `device_id` (stable source-isolated UUID), `harness` (`cla
 // → { "ok": true, "action": "commit", "snapshot_id": "<uuid>", "accepted": 123, "committed": true }
 ```
 
-For `munch backfill`, `begin` also includes `"backfill_from": "<UTC timestamp>"`. That selects append-only mode for this source; `backfill_from` (inclusive), `cutoff` (exclusive), and mode are immutable. Only observed Codex responses with complete token counts and unknown cost can be committed, always as history. Corrections are rejected. Existing or retired canonical identities are skipped across all sources without updating the old row, and responses on UTC dates with active reconstructed Codex usage for the account are withheld. In this mode `accepted` is the number inserted by the original commit, returned unchanged on exact replay. The window must be established by the operator; ledger history/live classification is not deduplication against proxy ingest.
+For `munch backfill`, `begin` also includes `"backfill_from": "<UTC timestamp>"`. The source's mode and its inclusive `backfill_from` and exclusive `cutoff` are immutable. Only observed requests with four complete token counts and unknown cost commit as history; corrections are rejected. Codex requires a response identity and a session ID. Claude requires the raw `req_…` canonical request ID and raw `msg_…` `response_id`, with null session and parent IDs. The optional `response_id` is reserved for this backfill mode.
+
+Previously accepted or retired identities are skipped across all sources, including retired Claude `request:` and `message:` keys and previously accepted Claude backfill response IDs. Candidates on UTC dates with active reconstructed contributions for the same harness are withheld; Claude also withholds dates with active scoped identities that cannot be joined. `accepted` is the number inserted by the original commit and is returned unchanged on exact replay. This ledger does not deduplicate against proxy ingest: the operator must independently establish a pre-proxy window.
 
 - **Bounds:** streaming UTF-8 body limit 256 KiB before parsing, at most 1,000 chunks, and 1–500 combined observations/correction entries per chunk. Empty snapshots use `chunk_count: 0` and no chunks. Maximum four pending snapshots per user; abandoned staging expires after seven days on the next begin. Begin/commit receipts and exact chunk digests persist; committed chunk payloads are cleared. Requests share the API-key rate budget.
 - **Projection:** all normalized fields are required: `harness`, `canonical_id`, `identity_strength`, `grain`, `timestamp`, `interval_start`, `interval_end`, `provider`, `model`, `session_id`, `parent_session_id`, `is_subagent`, four token fields (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`), `call_count`, `cost_usd`, `cost_basis`, `quality`. Local `diagnostics`, paths, cursors and raw source content are forbidden. Unknown keys reject the entire chunk. See [validator](functions/contributions/validation.ts) for exact caps/enums: IDs ≤512 characters, provider ≤64, model/session IDs ≤128, token/call values nullable nonnegative safe integers ≤1e9, cost nullable finite USD ≤10,000. `cost_basis: unknown` iff cost is null. Provider/model unknowns use `"unknown"`.
@@ -249,7 +252,7 @@ supabase db push
 supabase functions deploy ingest history contributions
 ```
 
-Deploy server changes **before** publishing a plugin or Munch version that depends on them. Codex backfill requires [`20261122040000_codex_backfill.sql`](migrations/20261122040000_codex_backfill.sql) and the updated `contributions` Edge Function. Both were deployed to production on 2026-11-22; apply and deploy them for your own instance as well.
+Deploy server changes **before** publishing a plugin or Munch version that depends on them. Codex backfill requires [`20261122040000_codex_backfill.sql`](migrations/20261122040000_codex_backfill.sql) and Claude Code backfill requires [`20261122050000_claude_backfill.sql`](migrations/20261122050000_claude_backfill.sql), each with the matching `contributions` Edge Function. Both were deployed to production on 2026-11-22; apply and deploy them for your own instance as well.
 
 Apply the database migrations **before** deploying a dashboard that uses `recent_activity` and spend coverage.
 

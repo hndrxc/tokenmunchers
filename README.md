@@ -9,15 +9,16 @@ The [dashboard](https://tokenmunchers.taiisshort.com) shows live activity, daily
 | Part | What it is | Docs |
 | --- | --- | --- |
 | **Site** | Leaderboard, Activity, profiles, and API key settings. | [dashboard/](dashboard/README.md) |
-| **Service** | `ingest` receives live plugin and proxy calls, `history` receives OMP imports, and `contributions` receives live desktop usage and Codex backfill. | [supabase/](supabase/README.md) |
+| **Service** | `ingest` receives live plugin and proxy calls, `history` receives OMP imports, and `contributions` receives live desktop usage and Codex and Claude Code backfill. | [supabase/](supabase/README.md) |
 | **Database** | Postgres stores usage and rolls it up into daily totals. | [supabase/](supabase/README.md) |
 | **Plugin** | `omp-tokenmunchers` reports Oh My Pi usage and imports OMP history. | [plugin/](plugin/README.md) |
-| **Program** | `munch` proxies tools such as Claude Code, Codex, and Gemini, collects local desktop usage, and imports Codex history. | [proxy/](proxy/README.md) |
+| **Program** | `munch` proxies tools such as Claude Code, Codex, and Gemini, collects local desktop usage, and imports retained Codex and Claude Code history. | [proxy/](proxy/README.md) |
 
 ## Contents
 
 - [Getting started](#getting-started)
 - [Windows PowerShell](#windows-powershell)
+- [Recommended commands after install](#4-recommended-commands-after-install)
 - [Everyday use](#everyday-use)
 - [Privacy](#privacy)
 - [Troubleshooting](#troubleshooting)
@@ -72,16 +73,30 @@ omp plugin install omp-tokenmunchers
 
 Start OMP and enter `/munch login tm_your_key_here`. See the [plugin README](plugin/README.md) for setup and configuration.
 
-### 4. Check the dashboard
+### 4. Recommended commands after install
+
+If you installed `munch`, these are the useful first commands. OMP-only users use [`/munch`](#omp-plugin-munch) instead.
+
+| Command | What it's for |
+| --- | --- |
+| `munch status` | Check that the service is running, your key is saved, and nothing is queued or failing |
+| `munch exec -- claude` | Run one CLI tool through Munch without changing your terminal (works for `codex` and other tools too) |
+| `munch env --shell powershell \| Out-String \| Invoke-Expression` | Windows: route tools started from this PowerShell window. On Linux/macOS, new terminals are already routed if you accepted shell setup. |
+| `munch desktop claude on`, then `munch restart` | Count Claude Desktop's local Code sessions; restart Claude Desktop afterward. Use `codex` for the Codex desktop app. |
+| `munch backfill` | Preview all retained Codex history (read-only) |
+| `munch backfill --harness claude-code` | Preview all retained Claude Code CLI and Desktop history (read-only) |
+| `munch backfill --before 2026-11-17 --upload` | Upload history before a cutoff you verified predates Munch; asks for confirmation. Add `--harness claude-code` for Claude. |
+| `munch stats` | Show tokens recorded on this machine today (`--period week` or `--period all` for more) |
+
+### 5. Check the dashboard
 
 Run `munch status` in your terminal or `/munch` inside OMP. Make a request in a configured tool, then look for it in the dashboard's **Activity** feed after the response finishes.
 
-### 5. Import your history (optional)
+### 6. Import your history (optional)
 
 - **OMP:** Run `/munch backfill` inside OMP. It previews the import and uploads only daily totals per model. Use `--exclude` to skip projects; repeating an upload replaces the previous one. See the [plugin README](plugin/README.md).
-- **Codex:** Run `munch backfill` in your terminal to preview retained usage. To upload, independently verify a pre-proxy UTC window, pass `--from` and `--before`, and confirm with `yes`. Desktop-collected usage is excluded, and the server keeps one copy per Codex response ID. [Codex backfill](proxy/README.md#codex-history-backfill) counts toward leaderboard totals but doesn't appear in Activity.
-
-Claude Code history import is not available.
+- **Codex:** Run `munch backfill` to preview all retained usage. To upload, pass a verified pre-proxy cutoff as `--before` and confirm with `yes`. `--from` is optional. Desktop-collected usage is excluded, and the server keeps one copy per Codex response ID. [Codex backfill](proxy/README.md#codex-history-backfill) counts toward leaderboard totals but doesn't appear in Activity.
+- **Claude Code:** Run `munch backfill --harness claude-code` to preview all retained CLI and local Desktop Code usage with verified final counts. Upload uses the same verified pre-proxy cutoff and confirmation. See [Claude Code backfill](proxy/README.md#claude-code-history-backfill).
 
 ## Everyday use
 
@@ -108,7 +123,7 @@ See the [plugin README](plugin/README.md) for all commands and configuration.
 | `munch stats` | View usage recorded on this machine |
 | `munch exec -- <command>` | Run one command through the proxy, for example `munch exec -- claude` |
 | `munch desktop claude\|codex on\|off` | Toggle collection for Claude Desktop local Code sessions or Codex desktop sessions on “This computer” |
-| `munch backfill` | Preview or import Codex history |
+| `munch backfill [--harness codex\|claude-code]` | Preview or import retained Codex or Claude Code history (Codex by default) |
 | `munch uninstall` | Remove the background service and Munch-managed shell, Codex, and Claude `settings.json` telemetry settings. Keeps the binary, saved key and settings, and OMP plugin. |
 
 See the [munch README](proxy/README.md) for all commands and [what Munch changes](proxy/README.md#what-munch-changes).
@@ -155,7 +170,7 @@ Munch desktop collection and munch backfill → contributions ┘
 | Folder | What's in it | Docs |
 | --- | --- | --- |
 | [`plugin/`](plugin/) | The `omp-tokenmunchers` OMP plugin (TypeScript, runs on Bun) | [plugin/README.md](plugin/README.md) |
-| [`proxy/`](proxy/) | `munch`: local proxy, desktop collector, and Codex history import (Go 1.24) | [proxy/README.md](proxy/README.md) |
+| [`proxy/`](proxy/) | `munch`: local proxy, desktop collector, and Codex and Claude Code history import (Go 1.24) | [proxy/README.md](proxy/README.md) |
 | [`dashboard/`](dashboard/) | The web dashboard (Next.js, deployed on Vercel) | [dashboard/README.md](dashboard/README.md) |
 | [`discord-bot/`](discord-bot/) | Guild slash-command bot for Discord (Node.js, discord.js) | [discord-bot/README.md](discord-bot/README.md) |
 | [`supabase/`](supabase/) | Database schema, security rules, scheduled jobs and Edge Functions | [supabase/README.md](supabase/README.md) |

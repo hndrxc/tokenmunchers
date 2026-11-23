@@ -121,8 +121,8 @@ export function SettingsClient({ profile, keys }: { profile: Profile; keys: ApiK
           </li>
         </ol>
         <p>
-          Munch can also report the Claude and Codex desktop apps (<code>munch desktop</code>), and <code>munch backfill</code>{" "}
-          imports earlier Codex usage.
+          For local desktop usage, see <code>munch desktop</code>. Preview retained history with <code>munch backfill</code> for
+          Codex or <code>munch backfill --harness claude-code</code> for the Claude Code CLI and Claude Desktop’s local Code tab.
         </p>
         <p className="sub" style={{ marginBottom: 0 }}>
           Only usage metadata is sent: model, token counts, cost and timestamps. Prompts, responses and provider credentials

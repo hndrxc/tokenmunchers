@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -100,6 +101,63 @@ func TestDesktopLedgerRestartActivationAndTailRepair(t *testing.T) {
 	c = openLedger(t, opts)
 	if queue := c.sources[Claude].queue; len(queue) != 2 || queue[1].CanonicalID != "req_reactivated" {
 		t.Fatal("record appended after torn-tail recovery did not replay")
+	}
+}
+
+func TestRecordedIDsSelectsHarnessAndDoesNotRepairLedger(t *testing.T) {
+	opts := ledgerOptions(t)
+	opts.CodexSince = ledgerEpoch
+	ids, err := RecordedIDs(opts.Dir, Claude)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("missing ledger: %v, %v", ids, err)
+	}
+	if _, err := os.Stat(opts.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read created state: %v", err)
+	}
+	c := openLedger(t, opts)
+	ledgerRecord(t, c, "live", ledgerEpoch)
+	codex := ledgerObservation("unused", ledgerEpoch)
+	codex.Harness, codex.CanonicalID, codex.IdentityStrength, codex.Provider = Codex, "resp_live", "response", "openai"
+	if err := c.Record(codex); err != nil {
+		t.Fatal(err)
+	}
+	for harness, want := range map[string]string{Claude: "req_live", Codex: "resp_live"} {
+		ids, err := RecordedIDs(opts.Dir, harness)
+		if _, ok := ids[want]; err != nil || !ok || len(ids) != 1 {
+			t.Fatalf("%s IDs: %v, %v", harness, ids, err)
+		}
+	}
+	if _, err := RecordedIDs(opts.Dir, "unsupported"); err == nil {
+		t.Fatal("unsupported harness accepted")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(opts.Dir, "ledger.jsonl")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A torn final line is ignored while it may be an in-progress append.
+	torn := append(before, []byte(`{"kind":"record","harness":"claude-code"`)...)
+	if err := os.WriteFile(path, torn, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = RecordedIDs(opts.Dir, Claude)
+	if _, ok := ids["req_live"]; err != nil || !ok || len(ids) != 1 {
+		t.Fatalf("torn ledger: %v, %v", ids, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(torn, after) {
+		t.Fatalf("read modified ledger: %v", err)
+	}
+	// A committed but malformed observation fails closed instead.
+	invalid := append(before, []byte(`{"kind":"record","harness":"claude-code","observation":{"harness":"claude-code","canonical_id":"msg_wrong"}}`+"\n")...)
+	if err := os.WriteFile(path, invalid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecordedIDs(opts.Dir, Claude); !errors.Is(err, errCorrupt) {
+		t.Fatalf("invalid record: %v", err)
 	}
 }
 

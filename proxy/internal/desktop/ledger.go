@@ -248,12 +248,15 @@ func (c *Collector) replay(entry ledgerEntry) error {
 	return nil
 }
 
-// RecordedCodexIDs reads the collector ledger without taking its writer lock
+// RecordedIDs reads a harness's collector ledger without taking its writer lock
 // or repairing it. Both pending and acknowledged observations remain owned.
 // Missing state is empty and invalid entries fail closed. An incomplete last
 // line is ignored, as the collector discards it on recovery: it may be an
 // append in progress, and a torn record was never queued for delivery.
-func RecordedCodexIDs(dir string) (map[string]struct{}, error) {
+func RecordedIDs(dir, harness string) (map[string]struct{}, error) {
+	if harness != Claude && harness != Codex {
+		return nil, errLedger
+	}
 	path := filepath.Join(dir, "ledger.jsonl")
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -273,7 +276,7 @@ func RecordedCodexIDs(dir string) (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s := c.sources[Codex]; s != nil {
+	if s := c.sources[harness]; s != nil {
 		return s.seen, nil
 	}
 	return nil, nil

@@ -268,14 +268,23 @@ func TestScanZeroWindow(t *testing.T) {
 		add(ts("2026-11-18T10:01:00.000Z"), u64p(2), "token_usage_record", record("resp_222", "ta-001", "turn-2", usage(500, 0, nil, 200, 0, 700))).
 		add(ts("2026-11-18T10:02:00.000Z"), u64p(3), "event_msg", tokenCount()).
 		raw("not-json{{").
-		add(ts("2026-11-18T10:03:00.000Z"), u64p(4), "token_usage_record", record("resp_333", "ta-001", "turn-3", usage(10, 0, nil, 10, 0, 20))).
-		add(ts("2026-11-17T00:00:00.000Z"), u64p(5), "token_usage_record", record("resp_444", "ta-001", "turn-4", usage(10, 0, nil, 10, 0, 20))).
+		add(ts("2026-11-19T00:00:00.000Z"), u64p(4), "token_usage_record", record("resp_333", "ta-001", "turn-3", usage(10, 0, nil, 10, 0, 20))).
+		add(ts("2026-11-16T00:00:00.000Z"), u64p(5), "token_usage_record", record("resp_444", "ta-001", "turn-4", usage(10, 0, nil, 10, 0, 20))).
 		write(t, root, "sessions/2026/11/18/rollout-2026-11-18T10-00-00-ab12cd34.jsonl")
 
 	pv := scanRoot(t, root, Window{})
-	wantIDs(t, pv, nil)
+	wantIDs(t, pv, []string{"resp_444", "resp_111", "resp_222", "resp_333"})
+	var input, output, cacheRead, cacheWrite int64
+	for _, r := range pv.Records {
+		input += r.Input
+		output += r.Output
+		cacheRead += r.CacheRead
+		cacheWrite += r.CacheWrite
+	}
+	if input != 1370 || output != 1020 || cacheRead != 300 || cacheWrite != 50 {
+		t.Errorf("token totals = input %d, output %d, cache read %d, cache write %d; want 1370, 1020, 300, 50", input, output, cacheRead, cacheWrite)
+	}
 	wantExcluded(t, pv, map[string]int{
-		ExclNoWindow:      4,
 		ExclLegacy:        1,
 		ExclMalformedJSON: 1,
 	})
@@ -423,6 +432,10 @@ func TestScanMunchContradiction(t *testing.T) {
 		ExclWindowContradiction:   2,
 		ExclWithheldContradiction: 1,
 	})
+
+	pv = scanRoot(t, root, Window{})
+	wantIDs(t, pv, []string{"resp_O"})
+	wantExcluded(t, pv, map[string]int{ExclOverlapMunch: 2})
 }
 
 // A legacy-mode fork (no ordinals) replays the parent's settings event, which
@@ -629,16 +642,18 @@ func TestScanDesktopOwnership(t *testing.T) {
 					add(ts(since.Add(offset).Format("2006-01-02T15:04:05.000Z")), nil, "token_usage_record", record("resp_owned", "thread", "", usage(10, 0, nil, 10, 0, 20))).
 					write(t, root, "sessions/rollout-"+id+".jsonl")
 			}
-			pv, err := Scan(context.Background(), root, testWindow, tc.ownership)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.excluded {
-				wantIDs(t, pv, nil)
-				wantExcluded(t, pv, map[string]int{ExclDesktopCollected: 1})
-			} else {
-				wantIDs(t, pv, []string{"resp_owned"})
-				wantExcluded(t, pv, map[string]int{})
+			for _, window := range []Window{testWindow, {}} {
+				pv, err := Scan(context.Background(), root, window, tc.ownership)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.excluded {
+					wantIDs(t, pv, nil)
+					wantExcluded(t, pv, map[string]int{ExclDesktopCollected: 1})
+				} else {
+					wantIDs(t, pv, []string{"resp_owned"})
+					wantExcluded(t, pv, map[string]int{})
+				}
 			}
 		})
 	}

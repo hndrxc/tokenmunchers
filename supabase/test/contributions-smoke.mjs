@@ -377,6 +377,141 @@ try {
   assert.equal((await request('commit',first)).error,'invalid_key');
   console.log('PASS staged contributions, Codex backfill retention and overlap, RLS, rate-limit reset, and revocation');
 
+  // Use an independent account/key so Claude cannot affect Codex rate-limit or rollup assertions.
+  {
+    const claudeUser = randomUUID(), liveDevice = randomUUID(), importDevice = randomUUID();
+    const claudeHash = createHash('sha256').update('synthetic-claude-key').digest('hex');
+    await db.query("insert into public.allowlist(email) values('claude-backfill-smoke@example.invalid')");
+    await db.query("insert into auth.users(id,email) values($1,'claude-backfill-smoke@example.invalid')", [claudeUser]);
+    await db.query("insert into public.api_keys(user_id,key_hash,key_prefix) values($1,$2,'test')", [claudeUser,claudeHash]);
+    const from = '2025-12-29T00:00:00.000Z', before = '2026-01-02T00:00:00.000Z';
+    const liveCutoff = '2025-12-31T00:00:00.000Z';
+    const claudeRPC = async (action,snapshot_id,extra = {},device_id = importDevice) => (await db.query(
+      'select public.publish_contributions($1,$2::jsonb) result',
+      [claudeHash,JSON.stringify({action,snapshot_id,device_id,harness:'claude-code',...extra})],
+    )).rows[0].result;
+    const beginClaude = async (sid,n,dev = importDevice) => {
+      const window = dev === liveDevice ? {cutoff:liveCutoff} : {cutoff:before,backfill_from:from};
+      assert.equal((await claudeRPC('begin',sid,{...window,chunk_count:n},dev)).ok,true);
+    };
+    const chunkClaude = async (sid,observations,index = 0,dev = importDevice,corrections = {}) =>
+      assert.equal((await claudeRPC('chunk',sid,{index,observations,...corrections},dev)).ok,true);
+    const live = (id, overrides = {}) => observation(id,{harness:'claude-code',identity_strength:'request',...overrides});
+    const historical = (request,response,overrides = {}) => live(`req_${request}`,{response_id:`msg_${response}`,...overrides});
+    const rows = async (dev = importDevice) => (await db.query(
+      `select canonical_id,partition,superseded,input_tokens::int,observation->>'response_id' response_id
+       from public.collector_contributions where user_id=$1 and device_id=$2 order by canonical_id`,
+      [claudeUser,dev],
+    )).rows;
+    const forgetFailedStage = sid => db.query(
+      'delete from private.contribution_snapshots where user_id=$1 and snapshot_id=$2 and committed_at is null',[claudeUser,sid],
+    );
+    assert.equal((await claudeRPC('begin',randomUUID(),{cutoff:before,backfill_from:before,chunk_count:0})).error,'invalid_body');
+
+    const firstLive = randomUUID();
+    await beginClaude(firstLive,1,liveDevice);
+    assert.equal((await claudeRPC('chunk',firstLive,{index:0,observations:[historical('forbidden','forbidden')]},liveDevice)).error,'invalid_body');
+    const reconTime = '2025-12-30T05:00:00.000Z';
+    await chunkClaude(firstLive,[
+      live('req_recent',{input_tokens:75}),
+      live('request:req_legacy'),
+      live('message:msg_legacy',{identity_strength:'response'}),
+      live('msg_raw',{identity_strength:'response'}),
+      live('scoped:old',{identity_strength:'scoped',timestamp:'2025-12-31T23:59:59.999Z'}),
+      live('reconstructed:old',{grain:'reconstructed_interval',timestamp:reconTime,interval_start:reconTime,interval_end:reconTime,quality:'reconstructed',call_count:null}),
+    ],0,liveDevice,{
+      superseded_canonical_ids:['request:req_retired','message:msg_retired'],
+      identity_aliases:[{from:'request:req_superseded',to:'message:msg_legacy'}],
+    });
+    assert.equal((await claudeRPC('commit',firstLive,{},liveDevice)).accepted,6);
+    const existing = await rows(liveDevice);
+    assert.equal(existing.find(row => row.canonical_id === 'req_recent').partition,'live');
+    assert.equal(existing.find(row => row.canonical_id === 'request:req_superseded').superseded,true);
+
+    const firstImport = randomUUID();
+    const keep = historical('keep','keep',{timestamp:from});
+    await beginClaude(firstImport,2);
+    assert.equal((await claudeRPC('begin',firstImport,{cutoff:before,chunk_count:2})).error,'mode_conflict');
+    assert.equal((await claudeRPC('begin',firstImport,{cutoff:before,backfill_from:'2025-12-28T00:00:00.000Z',chunk_count:2})).error,'window_conflict');
+    await chunkClaude(firstImport,[
+      keep,historical('recent','newRecent'),historical('legacy','other'),
+      historical('other','legacy'),historical('another','raw'),
+      historical('retired','newRetired'),historical('retiredResponse','retired'),
+      historical('superseded','newSuperseded'),
+      historical('scopedDay','newScoped',{timestamp:'2025-12-31T00:00:00.000Z'}),
+      historical('reconstructedDay','newReconstructed',{timestamp:'2025-12-30T23:59:59.999Z'}),
+    ]);
+    assert.deepEqual(await rows(),[]);
+    assert.equal((await claudeRPC('commit',firstImport)).error,'incomplete_snapshot');
+    const retained = historical('retained','retained');
+    await chunkClaude(firstImport,[retained],1);
+    assert.deepEqual(await rows(),[]);
+    const committed = await claudeRPC('commit',firstImport);
+    assert.equal(committed.accepted,2);
+    assert.deepEqual(await claudeRPC('commit',firstImport),committed);
+    assert.deepEqual(await rows(liveDevice),existing,'backfill leaves original owners, usage and partitions intact');
+    const imported = await rows();
+    assert.deepEqual(imported,[
+      {canonical_id:'req_keep',partition:'history',superseded:false,input_tokens:100,response_id:'msg_keep'},
+      {canonical_id:'req_retained',partition:'history',superseded:false,input_tokens:100,response_id:'msg_retained'},
+    ]);
+
+    // The current live collector uses the same raw request identity. A replay
+    // acknowledges without writing; conflicting correction claims still fail.
+    const replay = randomUUID();
+    await beginClaude(replay,1,liveDevice);
+    await chunkClaude(replay,[live('req_retained',{input_tokens:1})],0,liveDevice);
+    assert.equal((await claudeRPC('commit',replay,{},liveDevice)).accepted,1);
+    const correction = randomUUID();
+    await beginClaude(correction,1,liveDevice);
+    await chunkClaude(correction,[live('req_retained',{identity_strength:'response'})],0,liveDevice,{
+      identity_aliases:[{from:'request:req_legacy',to:'req_retained'}],
+    });
+    assert.equal((await claudeRPC('commit',correction,{},liveDevice)).error,'ownership_conflict');
+    await forgetFailedStage(correction);
+    assert.deepEqual(await rows(liveDevice),existing);
+    const legacyReplay = randomUUID();
+    await beginClaude(legacyReplay,1,liveDevice);
+    await chunkClaude(legacyReplay,[
+      live('request:req_keep'),
+      live('message:msg_retained',{identity_strength:'response'}),
+      live('msg_keep',{identity_strength:'response'}),
+    ],0,liveDevice,{identity_aliases:[{from:'request:req_retained',to:'message:msg_retained'}]});
+    assert.equal((await claudeRPC('commit',legacyReplay,{},liveDevice)).accepted,3);
+    assert.deepEqual(await rows(liveDevice),existing,'legacy delivery and its withheld alias target write nothing');
+
+    const rerun = randomUUID(), copiedDevice = randomUUID();
+    await beginClaude(rerun,1,copiedDevice);
+    await chunkClaude(rerun,[historical('keep','keep',{input_tokens:2}),historical('changedRequest','retained')],0,copiedDevice);
+    assert.equal((await claudeRPC('commit',rerun,{},copiedDevice)).accepted,0);
+    assert.deepEqual(await rows(copiedDevice),[]);
+    const empty = randomUUID();
+    await beginClaude(empty,0);
+    assert.equal((await claudeRPC('commit',empty)).accepted,0);
+    assert.deepEqual(await rows(),imported,'neither a live acknowledgment nor a pruned snapshot changes accepted history');
+
+    for (const overrides of [
+      {timestamp:before}, {timestamp:'2025-12-28T23:59:59.999Z'}, {response_id:undefined},
+      {canonical_id:'request:req_invalid'}, {response_id:'msg_'+'x'.repeat(125)},
+      {session_id:'private'}, {parent_session_id:'private'}, {cache_write_tokens:null},
+      {cost_usd:0,cost_basis:'reported'},
+    ]) {
+      const bad = randomUUID();
+      await beginClaude(bad,1);
+      await chunkClaude(bad,[historical('validSibling','validSibling'),historical('invalid','invalid',overrides)]);
+      assert.equal((await claudeRPC('commit',bad)).error,'backfill_window_violation',JSON.stringify(overrides));
+      assert.deepEqual(await rows(),imported,'one invalid row prevents any publication');
+      await forgetFailedStage(bad);
+    }
+    const duplicated = randomUUID();
+    await beginClaude(duplicated,2);
+    await chunkClaude(duplicated,[historical('repeat1','duplicate')]);
+    await chunkClaude(duplicated,[historical('repeat2','duplicate')],1);
+    assert.equal((await claudeRPC('commit',duplicated)).error,'duplicate_identity');
+    assert.deepEqual(await rows(),imported);
+    console.log('PASS Claude append-only windows, account-wide identity and UTC-day overlap, and live delivery compatibility');
+  }
+
   // Separate member/key after the rate-limit scenario; freeze the UTC day across the
   // raw-event and daily-rollup assertions, even if the smoke run crosses midnight.
   await db.exec('begin');

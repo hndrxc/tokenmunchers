@@ -2,7 +2,7 @@
 
 *Note: the native Claude Code and Codex plugins and the collector (`integrations/`) were removed. Those tools are now reported through `munch`. Paths to `integrations/` below refer to removed code.*
 
-**Status (2026-11-22):** Observed Codex usage backfill shipped in Munch 0.1.7; the database migration and updated `contributions` function are deployed to production. See [section 8](#8-munch-issue-4-observed-codex-import) for the import rules and [section 9](#9-codex-desktop-compatibility-check) for desktop compatibility. Claude Code history import remains unavailable.
+**Status:** Observed Codex backfill shipped in Munch 0.1.7. [Section 8](#8-munch-issue-4-observed-codex-import) describes that import. [Section 10](#10-claude-code-cli-and-desktop-backfill) describes Claude Code CLI and local Desktop Code backfill and verification. The server updates for both are deployed to production.
 
 **Date:** 2026-10-27 | **Scope:** Design review for Claude Code and OpenAI Codex CLI in `tokenmunchers`  
 **Sources:** Upstream repositories and packages at pinned commits. No application code changes.  
@@ -121,12 +121,12 @@ Commit [`53885816`](https://github.com/openai/codex/commit/53885816) introduced 
 | Gate | Requirement | Status |
 | :--- | :--- | :--- |
 | **Token normalization** | Disjoint categories and conservation checks against recorded usage. | Source/test evidence exists; validate each supported format/provider. |
-| **Claude historical output** | Establish final output availability and attribution in actual retained transcript fixtures. | Unresolved; assistant placeholders cannot be treated as final counts. |
+| **Claude historical output** | Establish final output availability and attribution in actual retained transcript fixtures. | Verified for retained sessions whose complete usage reconciles to the latest saved per-model `cost-state`; otherwise excluded. See [section 10](#10-claude-code-cli-and-desktop-backfill). |
 | **Forks, subagents, and mixed Codex formats** | Count newly incurred usage once without counting inherited prefixes. | Implemented for observed Codex responses: inherited prefixes are excluded and cumulative counters are not imported, including in mixed-format rollouts. |
 | **Legacy Codex quality** | Distinguish reconstructed totals, unknown call count, ambiguous ranges, and missing metadata. | Open; Munch does not reconstruct usage from legacy cumulative counters. |
-| **Retention-safe reimport** | Preserve accepted contributions when upstream files disappear; rerunning one import does not add again. | Resolved for Codex by the append-only server ledger: absent records are not removed and existing response identities are skipped. |
-| **Upload replacement** | Do not expose a partial replacement after an interrupted multi-chunk import. | Resolved for Codex: chunks are staged and published in a single commit; backfill appends rather than replacing accepted rows. |
-| **Cross-machine ownership** | Do not count a copied archive twice. | Mitigated for observed Codex contributions: the server deduplicates response IDs per account and harness across source devices. This does not deduplicate proxy ingest. |
+| **Retention-safe reimport** | Preserve accepted contributions when upstream files disappear; rerunning one import does not add again. | The append-only ledger never removes absent records and skips existing Codex and Claude identities. |
+| **Upload replacement** | Do not expose partial results after an interrupted multi-chunk import. | Chunks are staged and published in a single commit for both harnesses. |
+| **Cross-machine ownership** | Do not count a copied archive twice. | The server deduplicates observed identities per account and harness. This does not deduplicate proxy ingest. |
 
 ## 8. Munch issue #4: observed Codex import
 
@@ -145,3 +145,11 @@ On Linux, a test JSON-RPC client drove one local turn through the installed Code
 The [App Server initialization code](https://github.com/openai/codex/blob/6562117a81a9457c9d67a4d15b884bf80e7805f7/codex-rs/app-server/src/request_processors/initialize_processor.rs) accepts a client-supplied originator; a desktop-looking label is not proof of desktop provenance. The desktop check therefore drove the app's own UI rather than trusting existing rollouts labeled `Codex Desktop`.
 
 On Windows 11 (`10.0.26200.9974`), one disposable local turn (**This computer**, no project, no tools) in the signed-in Codex desktop app (package `OpenAI.Codex` `26.1111.9664.0`, embedded Codex `0.169.1`) wrote one `paginated` rollout in the default Codex home, with originator `Codex Desktop` and model provider `openai`. That Codex home has no Munch provider configured. The rollout held one top-level `token_usage_record` and one cumulative `token_count` event. `munch backfill`, built from this branch and run natively on Windows over `[2026-11-22T08:11:24.524Z, 2026-11-22T08:11:53.047Z)`, reported one eligible response at its recorded `08:11:29.807Z`: 7,361 input, 20 output, 12,800 cache-read and 0 cache-write tokens (raw input 20,161 minus cached; 13 reasoning tokens not added), total 20,181. The `token_count` event was excluded as legacy. A window ending exactly at the record's timestamp excluded it; one starting there included it. A no-window preview of the whole home (68 rollouts, no archive directory) completed without error. Nothing was uploaded. Cloud tasks and ordinary ChatGPT chats remain outside this check.
+
+## 10. Claude Code CLI and Desktop backfill
+
+- **Source and output evidence.** Both surfaces write local project JSONL. Deduplicate assistant frames by message ID and require each model's four disjoint token sums over a complete session group to match the latest saved `cost-state`. Reconcile before filtering the import window or Desktop ownership. Cost-state is cumulative evidence, not a separate accounting record; its dollar totals are never allocated to requests. Unverified usage is skipped.
+- **Windows Desktop check.** In signed-in Claude Desktop `6.28899.6.0` (embedded Claude Code `2.1.330`), a new **Code → This computer** session without a project wrote to `~/.claude/projects/` with `entrypoint: claude-desktop`. An idle open session had no `cost-state`; **Archive** flushed one. Unarchiving, resuming with a second no-tool turn, and archiving again appended a cumulative summary matching both distinct responses: 4 input, 42 output, 104,704 cache read and 37,132 cache write tokens. Both transcript request IDs and all counters matched Munch's acknowledged live telemetry. This is evidence for the tested build and session shape, not for all Desktop releases, helpers, providers, or remote sessions.
+- **Regression fixtures.** [`proxy/internal/backfill/testdata/claude`](../proxy/internal/backfill/testdata/claude) contains projections of the two real Desktop turns and real Claude Code `2.1.312` CLI resume and tool-turn captures from the [retired collector fixtures](https://github.com/hndrxc/tokenmunchers/tree/3aaae3659811a7cf6e768600d46a62e750a59cf7/integrations/claude-code/test/fixtures). Only selected accounting metadata remains; identifiers were replaced while preserving equality. No conversation content or raw session paths are included.
+- **Overlap.** Raw request IDs match Desktop accounting, and message IDs match legacy identities and copied transcripts. Unjoinable active legacy rows reserve the UTC day. Upload also requires an independently verified pre-proxy window for every included source and route; contributions and proxy ingest do not share a canonical ledger.
+

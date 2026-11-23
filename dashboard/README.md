@@ -6,7 +6,7 @@ The web front end for [tokenmunchers](../README.md), live at **[tokenmunchers.ta
 
 | Route | Description |
 | --- | --- |
-| `/` | Leaderboard (Today / Week / All time; tokens or cost; with or without subagent calls) with a per-member token sparkline for the selected period, "Live now", the activity feed, and group tokens per day |
+| `/` | Leaderboard (Today / Week / All time; tokens or known spend; with or without subagent calls) with a per-member token sparkline for the selected period, "Live now", the activity feed, and group tokens per day |
 | `/u/[handle]` | Member profile: totals, streaks, biggest day, tokens per day, model mix, recent calls |
 | `/settings` | Profile, API keys, setup instructions for OMP and munch, account deletion |
 | `/login` | GitHub / Discord sign-in |
@@ -41,7 +41,7 @@ The leaderboard's period picker selects what each column shows and also drives e
 
 Activity reads the existing ledger and does not show historical, reconstructed, scoped-identity or superseded contributions. Both sources share the ingest feed's UTC retention horizon and are capped together at the newest 50 calls on the home page or newest 25 for a member. Previously published usage still contributes to totals where eligible, even after it ages out of Activity. Strong canonical IDs are owned once per user/harness across devices, and accepted contributions survive source cleanup. Source logs are not complete billing ledgers.
 
-Codex history imported with `munch backfill` also goes through the contributions endpoint. It counts toward eligible leaderboard totals but does not appear in **Activity** or **Recent calls**. Claude Code history import is not available.
+Codex and Claude Code history imported with `munch backfill` goes through the contributions endpoint. It counts toward eligible leaderboard totals but does not appear in **Activity** or **Recent calls**.
 
 For mixed usage, the dashboard shows known spend alongside unpriced token coverage. When there is usage but none of it is priced, spend is **Unknown**, not $0; an actual reported zero remains zero. The dashboard labels estimates separately and indicates when the unpriced token count itself is unknown.
 
@@ -68,7 +68,7 @@ For sign-in to work locally, `http://localhost:3000/**` must be in the Supabase 
 
 ## Deploying
 
-For a new environment, apply the [Supabase migrations](../supabase/README.md#deploying) before deploying the dashboard. The dashboard expects the known-token and default-main attribution migrations, which expose known main and subagent token counts and count unclassified collector calls as main. The [Codex backfill migration](../supabase/migrations/20261122040000_codex_backfill.sql) and updated `contributions` Edge Function are already deployed to production.
+For a new environment, apply the [Supabase migrations](../supabase/README.md#deploying) before deploying the dashboard. The dashboard expects the known-token and default-main attribution migrations, which expose known main and subagent token counts and count unclassified collector calls as main. The [Codex backfill migration](../supabase/migrations/20261122040000_codex_backfill.sql) and [Claude Code backfill migration](../supabase/migrations/20261122050000_claude_backfill.sql), and the updated `contributions` Edge Function, are already deployed to production.
 
 The dashboard is a standard Next.js app. To deploy on Vercel:
 
