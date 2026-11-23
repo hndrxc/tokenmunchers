@@ -2,6 +2,8 @@
 #
 # install-munch.sh — install the latest stable munch CLI.
 #
+# Install: curl -fsSL https://tokenmunchers.taiisshort.com/install.sh | sh
+# To review first: curl -fsSL https://tokenmunchers.taiisshort.com/install.sh -o install-munch.sh
 # Usage: sh install-munch.sh
 #
 # Resolves the newest published munch-vX.Y.Z release of the
